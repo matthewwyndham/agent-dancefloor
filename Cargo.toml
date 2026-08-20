@@ -1,0 +1,16 @@
+[package]
+name = "dancefloor"
+version = "0.1.0"
+edition = "2021"
+description = "A terminal dashboard for live Claude Code sessions"
+license = "MIT"
+
+[dependencies]
+ratatui = "0.29"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+
+[profile.release]
+opt-level = 2
+strip = true
