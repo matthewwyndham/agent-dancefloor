@@ -38,10 +38,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     let Some(session) = app.selected_session() else {
         frame.render_widget(
-            Paragraph::new(Span::styled(
-                "Nothing selected.",
-                Style::new().fg(LABEL),
-            )),
+            Paragraph::new(Span::styled("Nothing selected.", Style::new().fg(LABEL))),
             content,
         );
         return;
@@ -56,8 +53,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_detail(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
-    let [info, gauge] =
-        Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
+    let [info, gauge] = Layout::vertical([Constraint::Min(0), Constraint::Length(2)]).areas(area);
 
     let mut lines = heading_lines(session);
     lines.extend(location_lines(session));
@@ -74,7 +70,11 @@ fn heading_lines(session: &Session) -> Vec<Line<'static>> {
         Line::from(vec![
             Span::styled(session.name.clone(), Style::new().fg(ACCENT).bold()),
             Span::styled(
-                format!("  {} {}", session.status.glyph(), session.status.description()),
+                format!(
+                    "  {} {}",
+                    session.status.glyph(),
+                    session.status.description()
+                ),
                 // The waiting state is the reason to open this pane at all, so it
                 // is coloured rather than left in label grey.
                 if session.status == Status::Waiting {
@@ -103,7 +103,10 @@ fn location_lines(session: &Session) -> Vec<Line<'static>> {
     if let Some(title) = &detail.title {
         lines.push(label_value("title", title.clone()));
     }
-    lines.push(label_value("cwd", session.cwd.to_string_lossy().to_string()));
+    lines.push(label_value(
+        "cwd",
+        session.cwd.to_string_lossy().to_string(),
+    ));
     lines.push(label_value(
         "branch",
         detail.git_branch.clone().unwrap_or_else(|| "—".into()),
@@ -214,8 +217,8 @@ fn draw_context_gauge(frame: &mut Frame, app: &App, session: &Session, area: Rec
         .as_ref()
         .map(|u| u.total())
         .unwrap_or(0);
-    let (limit, source) = session.context_limit(app.context_limit);
-    let ratio = session.context_ratio(app.context_limit);
+    let (limit, source) = session.context_limit(app.limits);
+    let ratio = session.context_ratio(app.limits);
 
     // The counts sit in the title and only the percentage rides the bar: a long
     // label centred over a partly-filled gauge is unreadable at either end.
@@ -260,10 +263,7 @@ fn draw_agents(frame: &mut Frame, session: &Session, area: Rect) {
     for agent in agents {
         lines.push(Line::from(vec![
             Span::styled(agent.name.clone(), Style::new().bold()),
-            Span::styled(
-                format!("  {}", agent.agent_type),
-                Style::new().fg(ACCENT),
-            ),
+            Span::styled(format!("  {}", agent.agent_type), Style::new().fg(ACCENT)),
             Span::styled(
                 format!("  depth {}", agent.spawn_depth),
                 Style::new().fg(LABEL),
@@ -291,10 +291,7 @@ fn draw_agents(frame: &mut Frame, session: &Session, area: Rect) {
         lines.push(Line::raw(""));
     }
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn draw_prompt(frame: &mut Frame, session: &Session, area: Rect) {
@@ -318,10 +315,7 @@ fn draw_prompt(frame: &mut Frame, session: &Session, area: Rect) {
         ))),
     }
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        area,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
 }
 
 fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
@@ -338,7 +332,10 @@ fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
         Some(usage) => {
             lines.push(label_value("input", tokens_short(usage.input)));
             lines.push(label_value("cache read", tokens_short(usage.cache_read)));
-            lines.push(label_value("cache write", tokens_short(usage.cache_creation)));
+            lines.push(label_value(
+                "cache write",
+                tokens_short(usage.cache_creation),
+            ));
             lines.push(label_value("output", tokens_short(usage.output)));
             lines.push(label_value("total", tokens_short(usage.total())));
             lines.push(label_value("peak seen", tokens_short(detail.usage_peak)));
@@ -368,7 +365,10 @@ fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
         ),
     ));
     lines.push(label_value("output", tokens_short(totals.output_tokens)));
-    lines.push(label_value("thinking", tokens_short(totals.thinking_tokens)));
+    lines.push(label_value(
+        "thinking",
+        tokens_short(totals.thinking_tokens),
+    ));
     lines.push(label_value(
         "cache write",
         tokens_short(totals.cache_creation_tokens),
@@ -378,9 +378,6 @@ fn draw_usage(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
         lines.push(label_value("tier", tier.clone()));
     }
 
-    frame.render_widget(
-        Paragraph::new(lines).wrap(Wrap { trim: false }),
-        breakdown,
-    );
+    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), breakdown);
     draw_context_gauge(frame, app, session, gauge);
 }

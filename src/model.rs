@@ -21,7 +21,8 @@ pub const MODEL_SYNTHETIC: &str = "<synthetic>";
 
 /// Context windows Claude Code actually ships. Assistant messages record the
 /// base model id (`claude-opus-5`) even on the `[1m]` variant, so the window has
-/// to come from `cost-state` lines, settings, or observed usage.
+/// to come from `cost-state` lines, settings, observed usage, or the fallback
+/// the user declared.
 pub const CONTEXT_LIMIT_STANDARD: u64 = 200_000;
 pub const CONTEXT_LIMIT_LONG: u64 = 1_000_000;
 
@@ -179,6 +180,8 @@ pub enum LimitSource {
     Recorded,
     /// Settings name the long variant of the model this session runs.
     Configured,
+    /// The user set a fallback window, by flag or in the config file.
+    Declared,
     /// Nothing said otherwise.
     Assumed,
 }
@@ -196,6 +199,18 @@ fn names_long_variant(configured: &str, model: &str) -> bool {
         return false;
     };
     !base.is_empty() && model.to_lowercase().contains(&base.to_lowercase())
+}
+
+/// The two windows the user can set, as opposed to what a session's own
+/// records show. `pinned` outranks every signal, including measured usage.
+/// `fallback` replaces the built-in 200k for a session that says nothing about
+/// its own window, which is every fresh long-context session: the model id on
+/// an assistant message drops the `[1m]` suffix, and the `cost-state` line that
+/// keeps it is only written at shutdown.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Limits {
+    pub pinned: Option<u64>,
+    pub fallback: Option<u64>,
 }
 
 #[derive(Debug, Clone)]
@@ -254,8 +269,8 @@ impl Session {
     /// Strongest evidence first: measured usage cannot be argued with, a
     /// `cost-state` line is the session's own record, and settings are only the
     /// default it started from.
-    pub fn context_limit(&self, override_limit: Option<u64>) -> (u64, LimitSource) {
-        if let Some(limit) = override_limit {
+    pub fn context_limit(&self, limits: Limits) -> (u64, LimitSource) {
+        if let Some(limit) = limits.pinned {
             return (limit, LimitSource::Override);
         }
         if self.detail.usage_peak > CONTEXT_LIMIT_STANDARD {
@@ -266,6 +281,9 @@ impl Session {
         }
         if self.configured_long() {
             return (CONTEXT_LIMIT_LONG, LimitSource::Configured);
+        }
+        if let Some(limit) = limits.fallback {
+            return (limit, LimitSource::Declared);
         }
         (CONTEXT_LIMIT_STANDARD, LimitSource::Assumed)
     }
@@ -282,15 +300,18 @@ impl Session {
     }
 
     fn configured_long(&self) -> bool {
-        match (self.configured_model.as_deref(), self.detail.model.as_deref()) {
+        match (
+            self.configured_model.as_deref(),
+            self.detail.model.as_deref(),
+        ) {
             (Some(configured), Some(model)) => names_long_variant(configured, model),
             _ => false,
         }
     }
 
-    pub fn context_ratio(&self, override_limit: Option<u64>) -> f64 {
+    pub fn context_ratio(&self, limits: Limits) -> f64 {
         let used = self.detail.usage.as_ref().map(|u| u.total()).unwrap_or(0);
-        let (limit, _) = self.context_limit(override_limit);
+        let (limit, _) = self.context_limit(limits);
         if limit == 0 {
             return 0.0;
         }
@@ -307,6 +328,30 @@ pub fn tokens_short(n: u64) -> String {
     } else {
         n.to_string()
     }
+}
+
+/// Read a token count the way the flags and the config file accept it: `1m`,
+/// `200k`, `1.5m`, `750000`. The suffixes are the ones `tokens_short` prints,
+/// so what the panels show is what the flags take.
+pub fn tokens_parse(raw: &str) -> Option<u64> {
+    let text = raw.trim().to_lowercase();
+    let (digits, scale) = match text.strip_suffix('m') {
+        Some(rest) => (rest, 1_000_000_f64),
+        None => match text.strip_suffix('k') {
+            Some(rest) => (rest, 1_000_f64),
+            None => (text.as_str(), 1_f64),
+        },
+    };
+    // A bare integer must not go through f64, which silently rounds past 2^53.
+    if scale == 1.0 {
+        return digits.parse::<u64>().ok().filter(|n| *n > 0);
+    }
+    let value: f64 = digits.parse().ok()?;
+    let total = value * scale;
+    if !(1.0..=u64::MAX as f64).contains(&total) {
+        return None;
+    }
+    Some(total.round() as u64)
 }
 
 /// Compact duration: `4d2h`, `3h12m`, `18m54s`, `41s`.
@@ -357,7 +402,7 @@ mod tests {
 
     #[test]
     fn usage_past_the_standard_window_settles_the_limit() {
-        let (limit, source) = session(386_849, 386_849).context_limit(None);
+        let (limit, source) = session(386_849, 386_849).context_limit(Limits::default());
         assert_eq!(limit, CONTEXT_LIMIT_LONG);
         assert_eq!(source, LimitSource::Observed);
         assert!(!source.is_guess());
@@ -365,7 +410,7 @@ mod tests {
 
     #[test]
     fn nothing_known_falls_back_to_the_standard_window() {
-        let (limit, source) = session(169_456, 169_456).context_limit(None);
+        let (limit, source) = session(169_456, 169_456).context_limit(Limits::default());
         assert_eq!(limit, CONTEXT_LIMIT_STANDARD);
         assert_eq!(source, LimitSource::Assumed);
         assert!(source.is_guess());
@@ -377,31 +422,89 @@ mod tests {
         let mut session = session(169_456, 169_456);
         session.detail.long_context_models = vec!["claude-opus-5".into()];
 
-        let (limit, source) = session.context_limit(None);
+        let (limit, source) = session.context_limit(Limits::default());
         assert_eq!(limit, CONTEXT_LIMIT_LONG);
         assert_eq!(source, LimitSource::Recorded);
-        assert!((session.context_ratio(None) - 0.169456).abs() < 1e-9);
+        assert!((session.context_ratio(Limits::default()) - 0.169456).abs() < 1e-9);
     }
 
     #[test]
     fn a_recorded_model_the_session_left_is_ignored() {
         let mut session = session(169_456, 169_456);
         session.detail.long_context_models = vec!["claude-fable-5".into()];
-        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+        assert_eq!(
+            session.context_limit(Limits::default()).1,
+            LimitSource::Assumed
+        );
     }
 
     #[test]
     fn settings_widen_only_the_family_they_name() {
         let mut session = session(100, 100);
         session.configured_model = Some("opus[1m]".into());
-        assert_eq!(session.context_limit(None).1, LimitSource::Configured);
+        assert_eq!(
+            session.context_limit(Limits::default()).1,
+            LimitSource::Configured
+        );
 
         session.detail.model = Some("claude-sonnet-5".into());
-        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+        assert_eq!(
+            session.context_limit(Limits::default()).1,
+            LimitSource::Assumed
+        );
 
         session.detail.model = Some("claude-opus-5".into());
         session.configured_model = Some("opus".into());
-        assert_eq!(session.context_limit(None).1, LimitSource::Assumed);
+        assert_eq!(
+            session.context_limit(Limits::default()).1,
+            LimitSource::Assumed
+        );
+    }
+
+    /// What the flag and the config file are for: a fresh long-context session
+    /// records nothing that names its window, so 169k read as 85% of 200k.
+    #[test]
+    fn a_declared_fallback_replaces_the_built_in_window() {
+        let session = session(169_456, 169_456);
+        let limits = Limits {
+            fallback: Some(CONTEXT_LIMIT_LONG),
+            ..Default::default()
+        };
+
+        let (limit, source) = session.context_limit(limits);
+        assert_eq!(limit, CONTEXT_LIMIT_LONG);
+        assert_eq!(source, LimitSource::Declared);
+        assert!(!source.is_guess());
+        assert!((session.context_ratio(limits) - 0.169456).abs() < 1e-9);
+    }
+
+    /// The fallback is the weakest signal, so a session that proves a wider
+    /// window keeps it. A narrow fallback must not shrink the gauge back.
+    #[test]
+    fn a_declared_fallback_yields_to_the_session_own_record() {
+        let mut session = session(386_849, 386_849);
+        let limits = Limits {
+            fallback: Some(CONTEXT_LIMIT_STANDARD),
+            ..Default::default()
+        };
+        assert_eq!(session.context_limit(limits).1, LimitSource::Observed);
+
+        session.detail.usage_peak = 100;
+        session.detail.long_context_models = vec!["claude-opus-5".into()];
+        assert_eq!(session.context_limit(limits).1, LimitSource::Recorded);
+    }
+
+    #[test]
+    fn token_counts_read_the_way_the_panels_print_them() {
+        assert_eq!(tokens_parse("1m"), Some(1_000_000));
+        assert_eq!(tokens_parse("1M"), Some(1_000_000));
+        assert_eq!(tokens_parse("200k"), Some(200_000));
+        assert_eq!(tokens_parse(" 1.5m "), Some(1_500_000));
+        assert_eq!(tokens_parse("750000"), Some(750_000));
+        // Every one of these would otherwise pin the window at zero or panic.
+        for bad in ["0", "0m", "m", "", "1mb", "-5", "1e400m", "abc", "1 m"] {
+            assert_eq!(tokens_parse(bad), None, "input: {bad:?}");
+        }
     }
 
     #[test]
@@ -409,7 +512,11 @@ mod tests {
         let mut session = session(386_849, 386_849);
         session.configured_model = Some("opus[1m]".into());
 
-        let (limit, source) = session.context_limit(Some(500_000));
+        let limits = Limits {
+            pinned: Some(500_000),
+            fallback: Some(CONTEXT_LIMIT_LONG),
+        };
+        let (limit, source) = session.context_limit(limits);
         assert_eq!(limit, 500_000);
         assert_eq!(source, LimitSource::Override);
         assert!(!source.is_guess());

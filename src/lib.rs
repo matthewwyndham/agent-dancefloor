@@ -2,6 +2,7 @@
 //! driven by tests without a terminal.
 
 pub mod app;
+pub mod config;
 pub mod discovery;
 pub mod model;
 pub mod settings;

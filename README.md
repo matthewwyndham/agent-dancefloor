@@ -41,8 +41,12 @@ The binary lands in `~/.cargo/bin/dancefloor`.
 dancefloor                        # the dashboard
 dancefloor --once                 # one plain-text table, then exit
 dancefloor --interval 5           # refresh every 5 seconds instead of 2
-dancefloor --context-limit 1000000  # pin the context window
+dancefloor --context-limit 1m     # pin the context window for every session
+dancefloor --context-default 1m   # the window to assume when a session proves nothing
 ```
+
+A token count is written `1m`, `200k` or `750000`. Both flags also take
+`--flag=value`.
 
 ### Keys
 
@@ -58,6 +62,20 @@ dancefloor --context-limit 1000000  # pin the context window
 
 The sort order cycles through status, context, uptime, and directory. Status sorts busy
 sessions first.
+
+## Config
+
+`~/.config/dancefloor/config.json` sets the default context window, so you do not pass
+`--context-default` on every run. `$XDG_CONFIG_HOME` is honoured when it is set.
+
+```json
+{
+  "default_context_limit": "1m"
+}
+```
+
+The value takes the same shorthand as the flag, or a plain number. `--context-default`
+outranks the file. A missing or half-written file is not an error.
 
 ## The panes
 
@@ -95,10 +113,24 @@ directory does not.
 
 **The context limit is worked out, not read.** Assistant messages record the base model id.
 They record `claude-opus-5` even when the session runs the `[1m]` long-context variant, so the
-window is never stated where the usage is. `dancefloor` takes the strongest signal it has: usage
-already past 200k, a `cost-state` line that billed this model at `[1m]`, or the model that
-settings name for the session's directory. A `~` after the limit means none of the three applied
-and 200k is a fallback. Use `--context-limit` to pin it.
+window is never stated where the usage is. `dancefloor` takes the strongest signal it has, in
+this order:
+
+| Signal      | Where it comes from                                              |
+| ----------- | ---------------------------------------------------------------- |
+| Override    | `--context-limit`                                                |
+| Observed    | usage already past 200k, so the long window is a fact            |
+| Recorded    | a `cost-state` line that billed this model at `[1m]`             |
+| Configured  | the model that Claude Code settings name for the session's directory |
+| Declared    | `--context-default`, or the config file                          |
+| Assumed     | nothing said otherwise, so 200k                                  |
+
+A live session often reaches none of the first four. Claude Code writes the `cost-state` line at
+shutdown, so a session that is still running has none, unless it was resumed from one that
+ended. Settings only answer when they name a `model`, and many machines choose the model with
+`/model` instead. So a fresh 1M session reads as 200k until its usage passes 200k. Set
+`default_context_limit` to stop that. A `~` after the limit means the number is the 200k
+fallback and nothing declared otherwise.
 
 **Rate limits are not shown.** Claude Code sends the 5-hour and 7-day figures to the status line
 hook on stdin. It does not write them to disk, so no external tool can read them.

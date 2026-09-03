@@ -2,12 +2,13 @@
 
 use std::time::Duration;
 
-use dancefloor::{app, discovery, model, ui};
+use dancefloor::{app, config, discovery, model, ui};
 
 use anyhow::{bail, Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
 use app::{App, Tab};
+use model::Limits;
 
 const POLL: Duration = Duration::from_millis(120);
 const INTERVAL_SECS_DEFAULT: u64 = 2;
@@ -15,7 +16,7 @@ const INTERVAL_SECS_MAX: u64 = 3600;
 
 struct Options {
     interval: Duration,
-    context_limit: Option<u64>,
+    limits: Limits,
     once: bool,
 }
 
@@ -31,7 +32,7 @@ fn main() -> Result<()> {
         bail!("no Claude Code directory at {}", home.display());
     }
 
-    let mut app = App::new(home, options.interval, options.context_limit);
+    let mut app = App::new(home, options.interval, options.limits);
     app.refresh();
 
     if options.once {
@@ -47,7 +48,9 @@ fn main() -> Result<()> {
 
 fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
     while !app.should_quit {
-        terminal.draw(|frame| ui::draw(frame, app)).context("draw")?;
+        terminal
+            .draw(|frame| ui::draw(frame, app))
+            .context("draw")?;
 
         // Poll on a short tick regardless of the refresh interval, so keys stay
         // responsive while data is re-read at its own pace.
@@ -114,11 +117,8 @@ fn print_snapshot(app: &App) {
             session.status.label(),
             truncate(&session.name, 20),
             truncate(&session.dir_label(), 18),
-            session.context_ratio(app.context_limit) * 100.0,
-            truncate(
-                session.detail.model.as_deref().unwrap_or("—"),
-                16
-            ),
+            session.context_ratio(app.limits) * 100.0,
+            truncate(session.detail.model.as_deref().unwrap_or("—"), 16),
             model::duration_short(session.uptime_secs(now)),
         );
     }
@@ -128,17 +128,26 @@ fn truncate(text: &str, width: usize) -> String {
     if text.chars().count() <= width {
         return text.to_string();
     }
-    text.chars().take(width.saturating_sub(1)).collect::<String>() + "…"
+    text.chars()
+        .take(width.saturating_sub(1))
+        .collect::<String>()
+        + "…"
 }
 
 fn parse_args() -> Result<Option<Options>> {
     let mut interval = Duration::from_secs(INTERVAL_SECS_DEFAULT);
-    let mut context_limit = None;
+    let mut limits = Limits::default();
     let mut once = false;
 
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        match arg.as_str() {
+        // `--flag=value` and `--flag value` both, because the shorthand invites
+        // the first and the older flag only ever took the second.
+        let (flag, inline) = match arg.split_once('=') {
+            Some((flag, value)) => (flag.to_string(), Some(value.to_string())),
+            None => (arg, None),
+        };
+        match flag.as_str() {
             "-h" | "--help" => {
                 print_help();
                 return Ok(None);
@@ -149,7 +158,7 @@ fn parse_args() -> Result<Option<Options>> {
             }
             "--once" => once = true,
             "-i" | "--interval" => {
-                let raw = args.next().context("--interval needs a value in seconds")?;
+                let raw = value_for(&flag, inline, &mut args, "a value in seconds")?;
                 let secs: u64 = raw
                     .parse()
                     .with_context(|| format!("--interval: {raw} is not a number of seconds"))?;
@@ -159,24 +168,50 @@ fn parse_args() -> Result<Option<Options>> {
                 interval = Duration::from_secs(secs);
             }
             "--context-limit" => {
-                let raw = args.next().context("--context-limit needs a token count")?;
-                let limit: u64 = raw
-                    .parse()
-                    .with_context(|| format!("--context-limit: {raw} is not a token count"))?;
-                if limit == 0 {
-                    bail!("--context-limit must be greater than zero");
-                }
-                context_limit = Some(limit);
+                limits.pinned = Some(token_count(&flag, inline, &mut args)?);
+            }
+            "--context-default" => {
+                limits.fallback = Some(token_count(&flag, inline, &mut args)?);
             }
             other => bail!("unknown argument: {other}\nrun with --help for usage"),
         }
     }
 
+    // The flag wins over the file, so read the file only when no flag spoke.
+    if limits.fallback.is_none() {
+        limits.fallback = config::path()
+            .as_deref()
+            .and_then(config::default_context_limit);
+    }
+
     Ok(Some(Options {
         interval,
-        context_limit,
+        limits,
         once,
     }))
+}
+
+fn value_for(
+    flag: &str,
+    inline: Option<String>,
+    args: &mut impl Iterator<Item = String>,
+    wants: &str,
+) -> Result<String> {
+    // An empty `--flag=` must not fall through to the next argument, which
+    // would silently eat the following flag as this one's value.
+    match inline.or_else(|| args.next()) {
+        Some(value) if !value.trim().is_empty() => Ok(value),
+        _ => bail!("{flag} needs {wants}"),
+    }
+}
+
+fn token_count(
+    flag: &str,
+    inline: Option<String>,
+    args: &mut impl Iterator<Item = String>,
+) -> Result<u64> {
+    let raw = value_for(flag, inline, args, "a token count, such as 1m")?;
+    model::tokens_parse(&raw).with_context(|| format!("{flag}: {raw} is not a token count"))
 }
 
 fn print_help() {
@@ -188,10 +223,22 @@ USAGE:
 
 OPTIONS:
     -i, --interval <SECONDS>   Refresh interval, 1 to {INTERVAL_SECS_MAX} (default {INTERVAL_SECS_DEFAULT})
-        --context-limit <N>    Pin the context window instead of inferring it
+        --context-limit <N>    Pin the context window for every session
+        --context-default <N>  Window to assume when a session proves nothing
         --once                 Print one plain-text snapshot and exit
     -h, --help                 Show this help
     -V, --version              Show the version
+
+A token count is written 1m, 200k or 750000.
+
+Set the default once instead of per run, in {config}:
+
+    {{ \"default_context_limit\": \"1m\" }}
+
+A running session names no context window: the model id on an assistant
+message drops the [1m] suffix, and the cost-state line that keeps it is
+only written at shutdown. So a fresh 1M session reads as 200k until its
+usage passes 200k, unless this default says otherwise.
 
 KEYS:
     j k        move between sessions
@@ -201,6 +248,9 @@ KEYS:
     r          refresh now
     ?          help
     q          quit",
-        env!("CARGO_PKG_VERSION")
+        env!("CARGO_PKG_VERSION"),
+        config = config::path()
+            .map(|path| path.display().to_string())
+            .unwrap_or_else(|| "the dancefloor config file".into()),
     );
 }

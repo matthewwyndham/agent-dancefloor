@@ -7,7 +7,7 @@ use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
 use crate::app::App;
-use crate::model::{Session, Status};
+use crate::model::{Limits, Session, Status};
 use crate::ui::{context_color, status_color, ACCENT, LABEL};
 
 const BAR_CELLS: u16 = 6;
@@ -55,7 +55,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let rows: Vec<Row> = app
         .sessions
         .iter()
-        .map(|session| build_row(session, app.context_limit, name_width, dir_width))
+        .map(|session| build_row(session, app.limits, name_width, dir_width))
         .collect();
 
     let table = Table::new(
@@ -76,13 +76,8 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_stateful_widget(table, area, &mut state);
 }
 
-fn build_row<'a>(
-    session: &'a Session,
-    context_limit: Option<u64>,
-    name_width: u16,
-    dir_width: u16,
-) -> Row<'a> {
-    let ratio = session.context_ratio(context_limit);
+fn build_row<'a>(session: &'a Session, limits: Limits, name_width: u16, dir_width: u16) -> Row<'a> {
+    let ratio = session.context_ratio(limits);
     let color = context_color(ratio);
 
     Row::new(vec![
