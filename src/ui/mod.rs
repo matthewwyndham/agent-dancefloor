@@ -1,5 +1,6 @@
 //! Screen layout: a header, the session list beside the detail pane, a footer.
 
+mod activity;
 mod detail;
 mod list;
 
@@ -9,10 +10,21 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Focus};
 
 pub const ACCENT: Color = Color::Cyan;
 pub const LABEL: Color = Color::DarkGray;
+/// The row a cursor sits on, in both the session list and the Activity pane.
+pub const SELECTED_BG: Color = Color::Indexed(238);
+
+/// The focused half of the screen is the one with the coloured border.
+pub fn border_color(focused: bool) -> Color {
+    if focused {
+        ACCENT
+    } else {
+        LABEL
+    }
+}
 
 /// Context colour, shared by the list column and the detail gauge so one
 /// session never reads as two different severities.
@@ -62,6 +74,9 @@ pub fn draw(frame: &mut Frame, app: &App) {
 
     draw_footer(frame, app, footer);
 
+    if app.focus == Focus::Tool {
+        activity::draw_tool(frame, app, frame.area());
+    }
     if app.show_help {
         draw_help(frame, frame.area());
     }
@@ -121,19 +136,32 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
-    let keys = [
-        ("j/k", "move"),
-        ("tab", "pane"),
-        ("1-4", "jump"),
-        ("s", "sort"),
-        ("r", "refresh"),
-        ("?", "help"),
-        ("q", "quit"),
-    ];
+    // The keys change with the focus, so the footer says what the arrows do
+    // right now rather than what they do most of the time.
+    let keys: &[(&str, &str)] = match app.focus {
+        Focus::Sessions => &[
+            ("j/k", "move"),
+            ("enter", "focus pane"),
+            ("tab", "pane"),
+            ("1-5", "jump"),
+            ("s", "sort"),
+            ("?", "help"),
+            ("q", "quit"),
+        ],
+        Focus::Pane => &[
+            ("↑/↓", "scroll"),
+            ("enter", "open call"),
+            ("esc", "sessions"),
+            ("tab", "pane"),
+            ("1-5", "jump"),
+            ("q", "quit"),
+        ],
+        Focus::Tool => &[("y", "copy"), ("esc", "close")],
+    };
     let mut spans = Vec::new();
     for (key, action) in keys {
         spans.push(Span::styled(format!(" {key} "), Style::new().fg(ACCENT)));
-        spans.push(Span::styled(action, Style::new().fg(LABEL)));
+        spans.push(Span::styled(*action, Style::new().fg(LABEL)));
     }
     if app.sessions.is_empty() {
         spans.push(Span::styled(
@@ -150,13 +178,16 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         Line::raw(""),
         label_value("j / ↓", "next session"),
         label_value("k / ↑", "previous session"),
+        label_value("enter", "focus the pane, then open a tool call"),
+        label_value("esc", "back to the session list"),
         label_value("tab / l", "next pane"),
         label_value("shift-tab", "previous pane"),
-        label_value("1 2 3 4", "Detail / Agents / Prompt / Usage"),
+        label_value("1 - 5", "Detail / Agents / Prompt / Usage / Activity"),
         label_value("s", "cycle sort order"),
         label_value("r", "refresh now"),
+        label_value("y", "copy an open tool call"),
         label_value("? ", "close this help"),
-        label_value("q / esc", "quit"),
+        label_value("q", "quit"),
         Line::raw(""),
         Line::from(vec![
             Span::styled(

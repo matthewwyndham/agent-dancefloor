@@ -13,9 +13,9 @@ use std::time::SystemTime;
 use serde_json::Value;
 
 use crate::model::{
-    ContextUsage, Detail, PullRequest, Worktree, LONG_CONTEXT_SUFFIX, MODEL_SYNTHETIC,
-    PROMPT_CHARS_MAX, PROMPT_SEARCH_BYTES_MAX,
-    PROMPT_SEARCH_CHUNK_BYTES, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
+    ContextUsage, Detail, Driver, PullRequest, ToolCall, Turn, Worktree, LONG_CONTEXT_SUFFIX,
+    MODEL_SYNTHETIC, PROMPT_CHARS_MAX, PROMPT_SEARCH_BYTES_MAX, PROMPT_SEARCH_CHUNK_BYTES,
+    TOOL_DETAIL_CHARS_MAX, TRANSCRIPT_LINES_MAX, TRANSCRIPT_TAIL_BYTES_MAX,
 };
 
 /// Find `projects/*/<session_id>.jsonl`.
@@ -221,6 +221,12 @@ fn parse_entry(entry: &Value, detail: &mut Detail, pending: &mut Pending) {
         "worktree-state" => parse_worktree(entry, detail),
         "pr-link" => parse_pull_request(entry, detail),
         "cost-state" => parse_cost_state(entry, detail),
+        "system" => parse_system(entry, detail),
+        "file-history-delta" => {
+            if let Some(path) = field("trackingPath") {
+                detail.activity.record_file(PathBuf::from(path));
+            }
+        }
         _ => {}
     }
 }
@@ -237,6 +243,11 @@ fn parse_assistant(entry: &Value, detail: &mut Detail) {
     }
 
     detail.totals.assistant_messages += 1;
+    // Every line of a turn carries the same attribution, and a turn that no
+    // skill drives carries none, so the newest line is always the right answer.
+    detail.activity.driver = read_driver(entry);
+    record_tool_calls(message, detail);
+
     if let Some(effort) = entry.get("effort").and_then(Value::as_str) {
         detail.effort = Some(effort.to_string());
     }
@@ -273,6 +284,109 @@ fn parse_assistant(entry: &Value, detail: &mut Detail) {
 
     detail.usage_peak = detail.usage_peak.max(current.total());
     detail.usage = Some(current);
+}
+
+/// A skill frames the whole turn, so it wins over one MCP call inside it.
+fn read_driver(entry: &Value) -> Option<Driver> {
+    let named = |key: &str| {
+        entry
+            .get(key)
+            .and_then(Value::as_str)
+            .filter(|name| !name.is_empty())
+            .map(str::to_string)
+    };
+    named("attributionSkill")
+        .map(Driver::Skill)
+        .or_else(|| named("attributionMcpTool").map(Driver::McpTool))
+}
+
+/// The key holding a summary someone wrote for the call. Only Bash, Agent and
+/// Monitor carry one.
+const TOOL_SUMMARY_KEY: &str = "description";
+
+/// The input keys naming what a call was aimed at, best first. A file path beats
+/// a search pattern, and a URL beats the prompt sent with it.
+const TOOL_DETAIL_KEYS: [&str; 7] = [
+    "file_path", "pattern", "url", "query", "skill", "command", "prompt",
+];
+
+fn record_tool_calls(message: &Value, detail: &mut Detail) {
+    let Some(blocks) = message.get("content").and_then(Value::as_array) else {
+        return;
+    };
+    for block in blocks {
+        if block.get("type").and_then(Value::as_str) != Some("tool_use") {
+            continue;
+        }
+        let Some(name) = block.get("name").and_then(Value::as_str) else {
+            continue;
+        };
+        let input = block.get("input");
+        detail.activity.record_tool(ToolCall {
+            name: tool_name(name),
+            summary: tool_field(input, |map| map.get(TOOL_SUMMARY_KEY).and_then(Value::as_str)),
+            detail: tool_field(input, |map| {
+                TOOL_DETAIL_KEYS
+                    .iter()
+                    .find_map(|key| map.get(*key).and_then(Value::as_str))
+                    // An MCP call matches none of the keys above, so it falls
+                    // back to whatever string it does carry.
+                    .or_else(|| map.values().find_map(Value::as_str))
+            }),
+        });
+    }
+}
+
+/// `mcp__claude_ai_Linear__get_issue` is mostly plumbing. The last segment is
+/// the part that names what was called.
+fn tool_name(raw: &str) -> String {
+    raw.rsplit("__").next().unwrap_or(raw).to_string()
+}
+
+/// Pull one input out of a call and flatten it to a single line. A command spans
+/// lines and a prompt spans paragraphs, and both are shown one row at a time.
+fn tool_field<'a>(
+    input: Option<&'a Value>,
+    pick: impl Fn(&'a serde_json::Map<String, Value>) -> Option<&'a str>,
+) -> String {
+    let Some(text) = input.and_then(Value::as_object).and_then(pick) else {
+        return String::new();
+    };
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= TOOL_DETAIL_CHARS_MAX {
+        return flat;
+    }
+    flat.chars().take(TOOL_DETAIL_CHARS_MAX).collect::<String>() + "…"
+}
+
+fn parse_system(entry: &Value, detail: &mut Detail) {
+    match entry.get("subtype").and_then(Value::as_str).unwrap_or("") {
+        "away_summary" => {
+            if let Some(content) = entry.get("content").and_then(Value::as_str) {
+                detail.activity.recap = Some(strip_recap_hint(content));
+            }
+        }
+        "turn_duration" => {
+            detail.activity.last_turn = Some(Turn {
+                duration_ms: entry.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
+                messages: entry.get("messageCount").and_then(Value::as_u64).unwrap_or(0),
+            });
+        }
+        _ => {}
+    }
+}
+
+/// The recap ends with a "(disable recaps in /config)" hint meant for the person
+/// running that session, not for a dashboard reading it from outside.
+fn strip_recap_hint(content: &str) -> String {
+    let text = content.trim();
+    let Some(open) = text.rfind('(') else {
+        return text.to_string();
+    };
+    if text.ends_with(')') && text[open..].contains("/config") {
+        return text[..open].trim_end().to_string();
+    }
+    text.to_string()
 }
 
 /// `cost-state` bills each model separately, keyed by the full id with the
@@ -388,6 +502,7 @@ fn user_prompt_text(entry: &Value) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::{TOOL_CALLS_MAX, TOOL_DETAIL_CHARS_MAX};
 
     /// A transcript shaped like the real thing: metadata lines, a tool result
     /// that must not be mistaken for a prompt, and a subagent line that must not
@@ -484,6 +599,147 @@ mod tests {
         parse_lines(&lines, &mut detail);
 
         assert!(detail.long_context_models.is_empty());
+    }
+
+    /// The lines the Activity pane reads, in the shape the real transcript
+    /// writes them: a recap with its /config trailer, a finished turn, an
+    /// attributed tool call, and an edited file.
+    fn activity_lines() -> Vec<String> {
+        [
+            r#"{"type":"system","subtype":"turn_duration","durationMs":418374,"messageCount":135}"#,
+            r#"{"type":"system","subtype":"away_summary","content":"Merged main and pushed. Next step is yours. (disable recaps in /config)"}"#,
+            r#"{"type":"file-history-delta","trackingPath":"/repo/src/app.rs"}"#,
+            r#"{"type":"file-history-delta","trackingPath":"/repo/src/ui/mod.rs"}"#,
+            r#"{"type":"file-history-delta","trackingPath":"/repo/src/app.rs"}"#,
+            r#"{"type":"assistant","attributionSkill":"pstack:poteto-mode","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Bash","input":{"command":"cargo test\n  --quiet","description":"Run the test suite"}}]}}"#,
+            r#"{"type":"assistant","attributionMcpTool":"get_issue","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"mcp__claude_ai_Linear__get_issue","input":{"id":"ENG-2766"}}]}}"#,
+            r#"{"type":"assistant","isSidechain":true,"message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Grep","input":{"pattern":"subagent only"}}]}}"#,
+        ]
+        .iter()
+        .map(|line| line.to_string())
+        .collect()
+    }
+
+    fn activity() -> crate::model::Activity {
+        let mut detail = Detail::default();
+        parse_lines(&activity_lines(), &mut detail);
+        detail.activity
+    }
+
+    #[test]
+    fn tool_calls_are_kept_in_the_order_they_ran() {
+        let activity = activity();
+        assert_eq!(activity.tools.len(), 2);
+        // Bash carries both, and both are kept: the summary says why the call
+        // ran, and only the command says what it will do.
+        assert_eq!(activity.tools[0].name, "Bash");
+        assert_eq!(activity.tools[0].summary, "Run the test suite");
+        assert_eq!(activity.tools[0].detail, "cargo test --quiet");
+        // An MCP tool keeps its last segment and falls back to its only input.
+        assert_eq!(activity.tools[1].name, "get_issue");
+        assert_eq!(activity.tools[1].summary, "");
+        assert_eq!(activity.tools[1].detail, "ENG-2766");
+    }
+
+    #[test]
+    fn a_subagents_tool_calls_stay_out_of_the_parent() {
+        assert!(!activity().tools.iter().any(|call| call.name == "Grep"));
+    }
+
+    #[test]
+    fn the_newest_assistant_line_says_what_is_driving() {
+        assert_eq!(
+            activity().driver,
+            Some(Driver::McpTool("get_issue".to_string()))
+        );
+    }
+
+    /// A turn nothing drives has to clear the last one's skill, or a finished
+    /// skill reads as still running for the rest of the session.
+    fn driver_after(extra: &str) -> Option<Driver> {
+        let mut lines = activity_lines();
+        lines.push(extra.to_string());
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+        detail.activity.driver
+    }
+
+    #[test]
+    fn an_unattributed_turn_clears_the_driver() {
+        assert_eq!(
+            driver_after(r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[]}}"#),
+            None
+        );
+    }
+
+    #[test]
+    fn a_skill_outranks_an_mcp_tool_on_the_same_line() {
+        assert_eq!(
+            driver_after(
+                r#"{"type":"assistant","attributionSkill":"omarchy","attributionMcpTool":"get_issue","message":{"model":"claude-opus-5","content":[]}}"#
+            ),
+            Some(Driver::Skill("omarchy".to_string()))
+        );
+    }
+
+    #[test]
+    fn the_recap_drops_the_hint_meant_for_that_session() {
+        assert_eq!(
+            activity().recap.as_deref(),
+            Some("Merged main and pushed. Next step is yours.")
+        );
+    }
+
+    #[test]
+    fn the_last_turn_is_read_whole() {
+        let turn = activity().last_turn.expect("turn");
+        assert_eq!(turn.duration_ms, 418_374);
+        assert_eq!(turn.messages, 135);
+    }
+
+    #[test]
+    fn a_file_edited_twice_is_listed_once_and_moves_to_the_end() {
+        let files = activity().files;
+        assert_eq!(
+            files,
+            vec![
+                PathBuf::from("/repo/src/ui/mod.rs"),
+                PathBuf::from("/repo/src/app.rs"),
+            ]
+        );
+    }
+
+    #[test]
+    fn the_activity_ring_stays_bounded() {
+        let call = r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/app.rs"}}]}}"#;
+        let lines: Vec<String> = std::iter::repeat_n(call.to_string(), TOOL_CALLS_MAX * 3).collect();
+
+        let mut detail = Detail::default();
+        parse_lines(&lines, &mut detail);
+        assert_eq!(detail.activity.tools.len(), TOOL_CALLS_MAX);
+    }
+
+    /// A bash command spans lines, and the pane shows it one row at a time.
+    #[test]
+    fn a_multiline_command_collapses_to_one_line() {
+        let input = serde_json::json!({"command": "first\n  second\n\tthird"});
+        let detail = tool_field(Some(&input), |map| {
+            map.get("command").and_then(Value::as_str)
+        });
+        assert_eq!(detail, "first second third");
+    }
+
+    /// The open call is copied whole, so what is held has to be the whole thing
+    /// up to a cap set well past any real command.
+    #[test]
+    fn only_a_pathological_command_is_cut() {
+        let long = "x".repeat(TOOL_DETAIL_CHARS_MAX * 2);
+        let input = serde_json::json!({"command": long});
+        let detail = tool_field(Some(&input), |map| {
+            map.get("command").and_then(Value::as_str)
+        });
+        assert_eq!(detail.chars().count(), TOOL_DETAIL_CHARS_MAX + 1);
+        assert!(detail.ends_with('…'));
     }
 
     #[test]

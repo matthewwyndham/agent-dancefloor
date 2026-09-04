@@ -13,6 +13,13 @@ pub const PROMPT_CHARS_MAX: usize = 4000;
 /// and the chunk size that search steps in.
 pub const PROMPT_SEARCH_BYTES_MAX: u64 = 16 * 1024 * 1024;
 pub const PROMPT_SEARCH_CHUNK_BYTES: u64 = 1024 * 1024;
+/// The Activity pane scrolls, so it keeps every tool call in the tail. This is
+/// only a ceiling against a pathological file, not the working size.
+pub const TOOL_CALLS_MAX: usize = 2048;
+pub const FILES_EDITED_MAX: usize = 12;
+/// A held command has to stay copyable in full, so this cap is set well past any
+/// real one. The pane cuts again to whatever one row fits.
+pub const TOOL_DETAIL_CHARS_MAX: usize = 8000;
 
 /// The model id Claude Code writes on assistant messages it generated locally,
 /// such as "No response requested." after an interrupt. They carry all-zero
@@ -115,6 +122,83 @@ pub struct TailTotals {
     pub web_searches: u64,
 }
 
+/// What is steering the newest turn, when anything is. A skill frames a whole
+/// turn and an MCP tool is one call inside it, so the two never both apply.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Driver {
+    Skill(String),
+    McpTool(String),
+}
+
+impl Driver {
+    pub fn label(&self) -> String {
+        match self {
+            Driver::Skill(name) => format!("skill {name}"),
+            Driver::McpTool(name) => format!("mcp {name}"),
+        }
+    }
+}
+
+/// A finished turn, as Claude Code measured it.
+#[derive(Debug, Clone, Copy)]
+pub struct Turn {
+    pub duration_ms: u64,
+    pub messages: u64,
+}
+
+/// One tool the session ran. A Bash call carries both a written summary and the
+/// command it summarises, and the pane shows both, so the two are kept apart.
+/// Tools with no summary leave it empty and say everything in `detail`.
+#[derive(Debug, Clone)]
+pub struct ToolCall {
+    pub name: String,
+    pub summary: String,
+    pub detail: String,
+}
+
+/// What the session is doing, as opposed to what it is configured as. Empty is
+/// a normal state: a session that has only just started has none of this yet.
+#[derive(Debug, Clone, Default)]
+pub struct Activity {
+    /// The recap Claude writes when the user walks away. A `/config` toggle, so
+    /// most sessions never have one.
+    pub recap: Option<String>,
+    pub driver: Option<Driver>,
+    /// The turn that just ended, not the one running now.
+    pub last_turn: Option<Turn>,
+    /// Oldest first, so the pane can read it back newest first. Every call in
+    /// the tail is kept; the pane scrolls rather than cutting the list.
+    pub tools: Vec<ToolCall>,
+    /// Files the session edited, each listed once, oldest edit first.
+    pub files: Vec<PathBuf>,
+}
+
+impl Activity {
+    pub fn is_empty(&self) -> bool {
+        self.recap.is_none()
+            && self.driver.is_none()
+            && self.last_turn.is_none()
+            && self.tools.is_empty()
+            && self.files.is_empty()
+    }
+
+    /// Newest wins, and a repeat edit moves the file up rather than doubling it.
+    pub fn record_file(&mut self, path: PathBuf) {
+        self.files.retain(|seen| *seen != path);
+        self.files.push(path);
+        if self.files.len() > FILES_EDITED_MAX {
+            self.files.remove(0);
+        }
+    }
+
+    pub fn record_tool(&mut self, call: ToolCall) {
+        self.tools.push(call);
+        if self.tools.len() > TOOL_CALLS_MAX {
+            self.tools.remove(0);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Worktree {
     pub name: String,
@@ -163,6 +247,7 @@ pub struct Detail {
     pub worktree: Option<Worktree>,
     pub pull_request: Option<PullRequest>,
     pub last_prompt: Option<String>,
+    pub activity: Activity,
     pub subagents: Vec<Subagent>,
     /// Set when the transcript exists but could not be read or parsed.
     pub read_error: Option<String>,

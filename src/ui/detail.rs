@@ -1,4 +1,4 @@
-//! The right-hand pane: four views over the selected session.
+//! The right-hand pane: five views over the selected session.
 
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
@@ -6,12 +6,13 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Gauge, Paragraph, Tabs, Wrap};
 use ratatui::Frame;
 
-use crate::app::{App, Tab};
+use crate::app::{App, Focus, Tab};
 use crate::model::{duration_short, tokens_short, Session, Status};
 use crate::ui::{context_color, label_value, status_color, ACCENT, LABEL};
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
-    let block = Block::bordered().border_style(Style::new().fg(LABEL));
+    let block = Block::bordered()
+        .border_style(Style::new().fg(crate::ui::border_color(app.focus != Focus::Sessions)));
     let inner = block.inner(area);
     frame.render_widget(block, area);
 
@@ -49,6 +50,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         Tab::Agents => draw_agents(frame, session, content),
         Tab::Prompt => draw_prompt(frame, session, content),
         Tab::Usage => draw_usage(frame, app, session, content),
+        Tab::Activity => super::activity::draw(frame, app, session, content),
     }
 }
 

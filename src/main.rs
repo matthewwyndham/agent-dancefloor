@@ -7,7 +7,7 @@ use dancefloor::{app, config, discovery, model, ui};
 use anyhow::{bail, Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 
-use app::{App, Tab};
+use app::{App, Focus, Tab};
 use model::Limits;
 
 const POLL: Duration = Duration::from_millis(120);
@@ -73,23 +73,50 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
     // Help swallows the next keypress so that closing it cannot also act.
     if app.show_help {
         app.show_help = false;
-        if !matches!(code, KeyCode::Char('?') | KeyCode::Esc) {
-            return;
+        return;
+    }
+    if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
+        app.should_quit = true;
+        return;
+    }
+
+    // An open tool call takes the arrows and `esc` for itself; anything else
+    // would move two cursors with one key.
+    if app.focus == Focus::Tool {
+        match code {
+            KeyCode::Char('y') => app.copy_tool(),
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('q') => app.close_tool(),
+            _ => {}
         }
         return;
     }
 
     match code {
-        KeyCode::Char('q') | KeyCode::Esc => app.should_quit = true,
-        KeyCode::Char('c') if modifiers.contains(KeyModifiers::CONTROL) => app.should_quit = true,
-        KeyCode::Char('j') | KeyCode::Down => app.select_next(),
-        KeyCode::Char('k') | KeyCode::Up => app.select_previous(),
+        KeyCode::Char('q') => app.should_quit = true,
+        // `esc` leaves the pane before it leaves the app.
+        KeyCode::Esc => match app.focus {
+            Focus::Pane => app.focus_sessions(),
+            _ => app.should_quit = true,
+        },
+        KeyCode::Enter => match app.focus {
+            Focus::Sessions => app.focus_pane(),
+            _ => app.open_tool(),
+        },
+        KeyCode::Char('j') | KeyCode::Down => match app.focus {
+            Focus::Sessions => app.select_next(),
+            _ => app.select_next_tool(),
+        },
+        KeyCode::Char('k') | KeyCode::Up => match app.focus {
+            Focus::Sessions => app.select_previous(),
+            _ => app.select_previous_tool(),
+        },
         KeyCode::Tab | KeyCode::Char('l') | KeyCode::Right => app.next_tab(),
         KeyCode::BackTab | KeyCode::Char('h') | KeyCode::Left => app.previous_tab(),
         KeyCode::Char('1') => app.tab = Tab::Detail,
         KeyCode::Char('2') => app.tab = Tab::Agents,
         KeyCode::Char('3') => app.tab = Tab::Prompt,
         KeyCode::Char('4') => app.tab = Tab::Usage,
+        KeyCode::Char('5') => app.tab = Tab::Activity,
         KeyCode::Char('s') => app.cycle_sort(),
         KeyCode::Char('r') => app.refresh(),
         KeyCode::Char('?') => app.show_help = true,
@@ -242,8 +269,11 @@ usage passes 200k, unless this default says otherwise.
 
 KEYS:
     j k        move between sessions
+    enter      focus the pane, then open a tool call
+    esc        back to the session list
+    y          copy an open tool call
     tab        next pane, shift-tab previous
-    1 2 3 4    Detail, Agents, Prompt, Usage
+    1 - 5      Detail, Agents, Prompt, Usage, Activity
     s          cycle sort order
     r          refresh now
     ?          help

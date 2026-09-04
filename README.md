@@ -8,7 +8,7 @@ session works, what it runs, how full its context window is, and which subagents
 ```
  dancefloor  5 sessions · 1 busy · sort status · every 2s
 ┌ Sessions ───────────────────────────────┐┌───────────────────────────────────────────────────────────────────┐
-│● api-server         api-ser… █████░  75%││ 1 Detail  │  2 Agents  │  3 Prompt  │  4 Usage                    │
+│● api-server         api-ser… █████░  75%││ 1 Detail  │  2 Agents  │  3 Prompt  │  4 Usage  │  5 Activity     │
 │○ checkout-flow      web-shop ███░░░  44%││checkout-flow  ○ idle for 2m18s                                    │
 │○ flaky-e2e          web-sho… ████░░  53%││                                                                   │
 │○ docs-sweep         docs-si… ░░░░░░   0%││title       Split the checkout reducer                             │
@@ -24,7 +24,7 @@ session works, what it runs, how full its context window is, and which subagents
 │                                         ││ context  445k / 1.0M                                              │
 │                                         ││██████████████████████████████  44%                                │
 └─────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────┘
- j/k move tab pane 1-4 jump s sort r refresh ? help q quit
+ j/k move tab pane 1-5 jump s sort r refresh ? help q quit
 ```
 
 ## Install
@@ -52,13 +52,19 @@ A token count is written `1m`, `200k` or `750000`. Both flags also take
 
 | Key         | Action                              |
 | ----------- | ----------------------------------- |
-| `j` `k`     | Move between sessions               |
+| `j` `k` `↑` `↓` | Move between sessions, or scroll the focused pane |
+| `enter`     | Focus the pane, then open the tool call under the cursor |
+| `esc`       | Back to the session list            |
+| `y`         | Copy an open tool call              |
 | `tab`       | Next pane, `shift-tab` for previous |
-| `1` `2` `3` `4` | Jump to Detail, Agents, Prompt, Usage |
+| `1` to `5`  | Jump to Detail, Agents, Prompt, Usage, Activity |
 | `s`         | Cycle the sort order                |
 | `r`         | Refresh now                         |
 | `?`         | Help                                |
 | `q`         | Quit                                |
+
+`enter` moves the keys from the session list into the pane; the coloured border says which
+half has them. `esc` gives them back.
 
 The sort order cycles through status, context, uptime, and directory. Status sorts busy
 sessions first.
@@ -91,6 +97,16 @@ or skill it runs, and how long its transcript has been idle.
 **Usage** breaks the newest request into input, cache read, cache write, and output tokens. It
 also totals recent activity over the part of the transcript that was read.
 
+**Activity** answers what the session is doing now. It leads with the recap Claude writes when
+you walk away, names the skill or MCP tool that drives the turn, and gives the length of the
+turn that just ended. Under that come the files the session edited and every tool call in the
+part of the transcript that was read, newest first. A recap is a `/config` toggle, so most
+sessions show the tool stream alone.
+
+Each tool row carries both the summary someone wrote for the call and the command itself, cut
+to one row. Press `enter` to focus the pane and scroll the list, `enter` again to open the call
+under the cursor, and `y` to put its full command on the clipboard.
+
 ## Where the data comes from
 
 `dancefloor` reads files that Claude Code already writes. It never talks to the API, and it
@@ -99,9 +115,10 @@ never writes to your Claude Code state.
 | Source | What it gives |
 | ------ | ------------- |
 | `~/.claude/sessions/<pid>.json` | The live session registry: pid, session id, directory, name, and busy or idle status |
-| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, and last prompt |
+| `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and the activity stream |
 | `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` per spawned subagent |
 | `ps` | CPU and resident memory per session process |
+| `wl-copy`, `xclip`, `xsel`, or `pbcopy` | Whichever is installed, to copy a tool call |
 
 A registry file outlives the process that wrote it. Every entry is confirmed against `ps`
 before `dancefloor` reports it, so a crashed session disappears on the next refresh.

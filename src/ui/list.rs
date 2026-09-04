@@ -6,9 +6,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Paragraph, Row, Table, TableState, Wrap};
 use ratatui::Frame;
 
-use crate::app::App;
+use crate::app::{App, Focus};
 use crate::model::{Limits, Session, Status};
-use crate::ui::{context_color, status_color, ACCENT, LABEL};
+use crate::ui::{border_color, context_color, status_color, ACCENT, LABEL, SELECTED_BG};
 
 const BAR_CELLS: u16 = 6;
 const PERCENT_CELLS: u16 = 4;
@@ -22,7 +22,7 @@ const FIXED_CELLS: u16 = STATUS_CELLS + 4 + BAR_CELLS + PERCENT_CELLS;
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
     let block = Block::bordered()
         .title(Span::styled(" Sessions ", Style::new().fg(ACCENT)))
-        .border_style(Style::new().fg(LABEL));
+        .border_style(Style::new().fg(border_color(app.focus == Focus::Sessions)));
 
     if app.sessions.is_empty() {
         // Wrapped, because this pane is narrow by design and an unwrapped hint
@@ -69,7 +69,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
         ],
     )
     .block(block)
-    .row_highlight_style(Style::new().bg(Color::Indexed(238)).bold())
+    .row_highlight_style(Style::new().bg(SELECTED_BG).bold())
     .highlight_symbol("");
 
     let mut state = TableState::default().with_selected(Some(app.selected));
