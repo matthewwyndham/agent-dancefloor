@@ -2,7 +2,7 @@
 
 use std::time::Duration;
 
-use dancefloor::{app, config, discovery, model, ui};
+use dancefloor::{app, config, discovery, editor, model, ui};
 
 use anyhow::{bail, Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -64,6 +64,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             }
         }
 
+        if let Some(path) = app.pending_open.take() {
+            // Hand the terminal to the editor.
+            ratatui::restore();
+            app.notice = editor::open(&path);
+            *terminal = ratatui::init();
+            terminal.clear().context("clear")?;
+        }
+
         if app.last_refresh.elapsed() >= app.interval {
             app.refresh();
         }
@@ -77,6 +85,7 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         app.show_help = false;
         return;
     }
+    app.notice = None;
     if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
@@ -119,6 +128,8 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('3') => app.tab = Tab::Prompt,
         KeyCode::Char('4') => app.tab = Tab::Usage,
         KeyCode::Char('5') => app.tab = Tab::Activity,
+        KeyCode::Char('o') => app.open_raw_log(),
+        KeyCode::Char('O') => app.open_digest(),
         KeyCode::Char('s') => app.cycle_sort(),
         KeyCode::Char('r') => app.refresh(),
         KeyCode::Char('?') => app.show_help = true,
@@ -278,6 +289,8 @@ KEYS:
     enter      focus the pane, then open a tool call
     esc        back to the session list
     y          copy an open tool call
+    o          open the raw log in $EDITOR
+    O          open a digest: thinking, commands, agents
     tab        next pane, shift-tab previous
     1 - 5      Detail, Agents, Prompt, Usage, Activity
     s          cycle sort order

@@ -57,6 +57,8 @@ A token count is written `1m`, `200k` or `750000`. Both flags also take
 | `enter`     | Focus the pane, then open the tool call under the cursor |
 | `esc`       | Back to the session list            |
 | `y`         | Copy an open tool call              |
+| `o`         | Open the raw session log in your editor |
+| `O`         | Open a digest of the session in your editor |
 | `tab`       | Next pane, `shift-tab` for previous |
 | `1` to `5`  | Jump to Detail, Agents, Prompt, Usage, Activity |
 | `s`         | Cycle the sort order                |
@@ -69,6 +71,15 @@ half has them. `esc` gives them back.
 
 The sort order cycles through status, context, uptime, and directory. Status sorts busy
 sessions first.
+
+`o` and `O` use `$VISUAL`, then `$EDITOR`, then `vi`. The dashboard waits until the editor
+closes.
+
+The digest is a Markdown file in `$TMPDIR/dancefloor/`. It lists the prompts, the thinking,
+and each tool call with its full command. Each agent gets its own section, so you can see
+which agent did what. For Claude Code, each subagent section shows the agent type and task.
+It reads the whole log, not only the tail. Codex usually encrypts its reasoning, so the digest
+shows `(encrypted)` for those steps.
 
 ## Config
 

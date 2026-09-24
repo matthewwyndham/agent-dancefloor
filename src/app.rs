@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::model::{ClientKind, Limits, Session, SessionKey, ToolCall};
-use crate::{clipboard, process, providers, settings, subagents, transcript};
+use crate::{clipboard, digest, process, providers, settings, subagents, transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -93,6 +93,10 @@ pub struct App {
     pub tool_cursor: usize,
     /// What the last copy did. Shown in the open tool, cleared when it closes.
     pub copy_notice: Option<String>,
+    /// A file to open in the editor.
+    pub pending_open: Option<PathBuf>,
+    /// Footer message; the next key clears it.
+    pub notice: Option<String>,
     pub limits: Limits,
     pub interval: Duration,
     pub last_refresh: Instant,
@@ -119,6 +123,8 @@ impl App {
             focus: Focus::Sessions,
             tool_cursor: 0,
             copy_notice: None,
+            pending_open: None,
+            notice: None,
             limits,
             interval,
             last_refresh: Instant::now(),
@@ -344,6 +350,29 @@ impl App {
             Some(error) => format!("copy failed: {error}"),
             None => format!("copied {} characters", text.chars().count()),
         });
+    }
+
+    /// Queue the raw log for the editor.
+    pub fn open_raw_log(&mut self) {
+        match self
+            .selected_session()
+            .and_then(|s| s.detail.transcript.clone())
+        {
+            Some(path) => self.pending_open = Some(path),
+            None => self.notice = Some("no log for this session".to_string()),
+        }
+    }
+
+    /// Write the digest, then queue it.
+    pub fn open_digest(&mut self) {
+        let Some(session) = self.selected_session() else {
+            self.notice = Some("no session selected".to_string());
+            return;
+        };
+        match digest::write(session) {
+            Ok(path) => self.pending_open = Some(path),
+            Err(error) => self.notice = Some(format!("digest failed: {error}")),
+        }
     }
 
     pub fn next_tab(&mut self) {

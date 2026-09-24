@@ -158,6 +158,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Focus::Sessions => &[
             ("j/k", "move"),
             ("enter", "focus pane"),
+            ("o/O", "log/digest"),
             ("tab", "pane"),
             ("1-5", "jump"),
             ("s", "sort"),
@@ -178,6 +179,12 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     for (key, action) in keys {
         spans.push(Span::styled(format!(" {key} "), Style::new().fg(ACCENT)));
         spans.push(Span::styled(*action, Style::new().fg(LABEL)));
+    }
+    if let Some(notice) = &app.notice {
+        spans.push(Span::styled(
+            format!("   {notice}"),
+            Style::new().fg(Color::Yellow),
+        ));
     }
     if app.sessions.is_empty() {
         spans.push(Span::styled(
@@ -202,6 +209,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         label_value("s", "cycle sort order"),
         label_value("r", "refresh now"),
         label_value("y", "copy an open tool call"),
+        label_value("o", "open the raw log in $EDITOR"),
+        label_value("O", "open a digest: thinking, commands, agents"),
         label_value("? ", "close this help"),
         label_value("q", "quit"),
         Line::raw(""),
