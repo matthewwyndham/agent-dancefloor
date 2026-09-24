@@ -1,4 +1,4 @@
-//! dancefloor — a terminal dashboard for live Claude Code sessions.
+//! dancefloor — a terminal dashboard for live coding-agent sessions.
 
 use std::time::Duration;
 
@@ -27,10 +27,12 @@ fn main() -> Result<()> {
         None => return Ok(()),
     };
 
-    let home = discovery::claude_home()?;
-    if !home.is_dir() {
-        bail!("no Claude Code directory at {}", home.display());
-    }
+    let home = discovery::claude_home().unwrap_or_else(|_| {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".claude")
+    });
 
     let mut app = App::new(home, options.interval, options.limits);
     app.refresh();
@@ -129,19 +131,23 @@ fn print_snapshot(app: &App) {
     if let Some(error) = &app.scan_error {
         eprintln!("scan failed: {error}");
     }
+    for warning in &app.provider_warnings {
+        eprintln!("{} unavailable: {}", warning.provider, warning.message);
+    }
     if app.sessions.is_empty() {
-        println!("no live Claude Code sessions");
+        println!("no live coding-agent sessions");
         return;
     }
     println!(
-        "{:<8} {:<20} {:<18} {:>5}  {:<16} {:>8}",
-        "STATUS", "NAME", "DIR", "CTX", "MODEL", "UP"
+        "{:<8} {:<7} {:<20} {:<18} {:>5}  {:<16} {:>8}",
+        "STATUS", "CLIENT", "NAME", "DIR", "CTX", "MODEL", "UP"
     );
     let now = App::now_ms();
     for session in &app.sessions {
         println!(
-            "{:<8} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
+            "{:<8} {:<7} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
             session.status.label(),
+            session.client.short_label(),
             truncate(&session.name, 20),
             truncate(&session.dir_label(), 18),
             session.context_ratio(app.limits) * 100.0,
@@ -243,7 +249,7 @@ fn token_count(
 
 fn print_help() {
     println!(
-        "dancefloor {} — a terminal dashboard for live Claude Code sessions
+        "dancefloor {} — a terminal dashboard for live coding-agent sessions
 
 USAGE:
     dancefloor [OPTIONS]

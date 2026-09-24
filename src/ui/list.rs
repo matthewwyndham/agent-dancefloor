@@ -35,7 +35,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
             )),
             Line::raw(""),
             Line::from(Span::styled(
-                " Start Claude Code anywhere and it shows up here.",
+                " Start Claude Code, Codex, or Pi anywhere and it shows up here.",
                 Style::new().fg(LABEL),
             )),
         ])
@@ -86,7 +86,10 @@ fn build_row<'a>(session: &'a Session, limits: Limits, name_width: u16, dir_widt
             glyph_style(session.status),
         )),
         Cell::from(Span::styled(
-            elide(&session.name, name_width as usize),
+            elide(
+                &format!("[{}] {}", session.client.short_label(), session.name),
+                name_width as usize,
+            ),
             name_style(session.status),
         )),
         Cell::from(Span::styled(

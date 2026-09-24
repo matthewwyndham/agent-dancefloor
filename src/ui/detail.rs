@@ -70,6 +70,10 @@ fn draw_detail(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
 fn heading_lines(session: &Session) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
+            Span::styled(
+                format!("{}  ", session.client.label()),
+                Style::new().fg(ACCENT).bold(),
+            ),
             Span::styled(session.name.clone(), Style::new().fg(ACCENT).bold()),
             Span::styled(
                 format!(

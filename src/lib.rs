@@ -6,6 +6,8 @@ pub mod clipboard;
 pub mod config;
 pub mod discovery;
 pub mod model;
+pub mod process;
+pub mod providers;
 pub mod settings;
 pub mod subagents;
 pub mod transcript;

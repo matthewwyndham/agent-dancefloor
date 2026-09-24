@@ -9,7 +9,7 @@ use std::process::Command;
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::model::{ProcStat, Session, Status, SESSIONS_MAX};
+use crate::model::{ClientKind, ProcStat, Session, Status, SESSIONS_MAX};
 
 #[derive(Debug, Deserialize)]
 struct SessionFile {
@@ -78,6 +78,7 @@ pub fn scan(claude_home: &Path) -> Result<Vec<Session>> {
             continue;
         };
         sessions.push(Session {
+            client: ClientKind::Claude,
             pid: file.pid,
             session_id: file.session_id,
             cwd: PathBuf::from(file.cwd),

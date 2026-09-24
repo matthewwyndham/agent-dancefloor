@@ -1,11 +1,11 @@
 //! Application state and the input handling that mutates it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::model::{Limits, Session, ToolCall};
-use crate::{clipboard, discovery, settings, subagents, transcript};
+use crate::model::{ClientKind, Limits, Session, SessionKey, ToolCall};
+use crate::{clipboard, process, providers, settings, subagents, transcript};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tab {
@@ -82,6 +82,7 @@ impl Sort {
 
 pub struct App {
     pub claude_home: PathBuf,
+    pub provider_homes: providers::ProviderHomes,
     pub sessions: Vec<Session>,
     pub selected: usize,
     pub tab: Tab,
@@ -96,17 +97,21 @@ pub struct App {
     pub interval: Duration,
     pub last_refresh: Instant,
     pub scan_error: Option<String>,
+    pub provider_warnings: Vec<providers::ProviderWarning>,
     pub show_help: bool,
     pub should_quit: bool,
     /// Locating a transcript means scanning every project directory, so the
     /// answer is kept for the life of the session rather than re-derived.
-    transcript_paths: HashMap<String, Option<PathBuf>>,
+    transcript_paths: HashMap<SessionKey, Option<PathBuf>>,
 }
 
 impl App {
     pub fn new(claude_home: PathBuf, interval: Duration, limits: Limits) -> Self {
+        let mut provider_homes = providers::ProviderHomes::from_env();
+        provider_homes.claude = claude_home.clone();
         Self {
             claude_home,
+            provider_homes,
             sessions: Vec::new(),
             selected: 0,
             tab: Tab::Detail,
@@ -118,6 +123,7 @@ impl App {
             interval,
             last_refresh: Instant::now(),
             scan_error: None,
+            provider_warnings: Vec::new(),
             show_help: false,
             should_quit: false,
             transcript_paths: HashMap::new(),
@@ -139,9 +145,10 @@ impl App {
     /// highlighted, because sorting can move rows under the cursor.
     pub fn refresh(&mut self) {
         self.last_refresh = Instant::now();
-        let anchor = self.selected_session().map(|s| s.pid);
+        let anchor = self.selected_session().map(Session::key);
+        let snapshot = process::snapshot();
 
-        let mut sessions = match discovery::scan(&self.claude_home) {
+        let mut sessions = match providers::claude::discover(&self.claude_home, &snapshot) {
             Ok(sessions) => {
                 self.scan_error = None;
                 sessions
@@ -151,11 +158,29 @@ impl App {
                 return;
             }
         };
+        self.provider_warnings.clear();
+        match providers::codex::discover(&self.provider_homes.codex, &snapshot) {
+            Ok(mut found) => sessions.append(&mut found),
+            Err(err) => self.provider_warnings.push(providers::ProviderWarning {
+                provider: "Codex",
+                message: err.to_string(),
+            }),
+        }
+        match providers::pi::discover(&self.provider_homes.pi_sessions, &snapshot) {
+            Ok(mut found) => sessions.append(&mut found),
+            Err(err) => self.provider_warnings.push(providers::ProviderWarning {
+                provider: "Pi",
+                message: err.to_string(),
+            }),
+        }
 
         for session in &mut sessions {
+            if session.client != ClientKind::Claude {
+                continue;
+            }
             let path = self
                 .transcript_paths
-                .entry(session.session_id.clone())
+                .entry(session.key())
                 .or_insert_with(|| transcript::locate(&self.claude_home, &session.session_id))
                 .clone();
             if let Some(path) = path {
@@ -165,15 +190,23 @@ impl App {
             // Re-read every tick, not cached: settings can change under a
             // running session, and three small files cost nothing next to the
             // transcript tail above.
-            session.configured_model = settings::model_for(&self.claude_home, &session.cwd);
+            if session.client == ClientKind::Claude {
+                session.configured_model = settings::model_for(&self.claude_home, &session.cwd);
+            }
         }
+
+        // Providers may observe more than one launcher/runtime process for a
+        // single transcript. The UI identity is the provider-qualified
+        // session key, so enforce the same invariant at the merge boundary.
+        let mut seen = HashSet::new();
+        sessions.retain(|session| seen.insert(session.key()));
 
         self.sessions = sessions;
         self.sort_sessions();
         self.prune_transcript_cache();
 
         self.selected = anchor
-            .and_then(|pid| self.sessions.iter().position(|s| s.pid == pid))
+            .and_then(|key| self.sessions.iter().position(|s| s.key() == key))
             .unwrap_or(self.selected)
             .min(self.sessions.len().saturating_sub(1));
 
@@ -222,7 +255,7 @@ impl App {
         if self.transcript_paths.len() <= self.sessions.len() {
             return;
         }
-        let live: Vec<String> = self.sessions.iter().map(|s| s.session_id.clone()).collect();
+        let live: Vec<SessionKey> = self.sessions.iter().map(Session::key).collect();
         self.transcript_paths.retain(|id, _| live.contains(id));
     }
 
@@ -272,7 +305,9 @@ impl App {
     /// that `enter` and `esc` mean the same thing on every tab.
     pub fn focus_pane(&mut self) {
         self.focus = Focus::Pane;
-        self.tool_cursor = self.tool_cursor.min(self.visible_tools().len().saturating_sub(1));
+        self.tool_cursor = self
+            .tool_cursor
+            .min(self.visible_tools().len().saturating_sub(1));
     }
 
     pub fn focus_sessions(&mut self) {

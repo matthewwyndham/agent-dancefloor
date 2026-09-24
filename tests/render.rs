@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use dancefloor::app::{App, Focus, Tab};
 use dancefloor::model::{
-    Activity, ContextUsage, Detail, Driver, Limits, ProcStat, PullRequest, Session, Status,
-    Subagent, TailTotals, ToolCall, Turn, Worktree,
+    Activity, ClientKind, ContextUsage, Detail, Driver, Limits, ProcStat, PullRequest, Session,
+    Status, Subagent, TailTotals, ToolCall, Turn, Worktree,
 };
 use dancefloor::ui;
 use ratatui::backend::TestBackend;
@@ -21,6 +21,7 @@ const SIZES: [(u16, u16); 6] = [(20, 8), (40, 12), (80, 24), (120, 40), (200, 60
 
 fn populated_session() -> Session {
     Session {
+        client: ClientKind::Claude,
         pid: 4242,
         session_id: "00000000-0000-4000-8000-000000000000".into(),
         cwd: PathBuf::from("/Users/someone/code/dancefloor"),
@@ -104,6 +105,8 @@ fn populated_session() -> Session {
                 spawn_depth: 1,
                 age_secs: Some(240),
                 bytes: 18_432,
+                client: None,
+                session_id: None,
             }],
             read_error: None,
         },
@@ -196,13 +199,22 @@ fn focusing_the_pane_scrolls_the_list_under_the_cursor() {
 
     let screen = render(&app, 140, 24);
     assert!(screen.contains("tools  200"), "count missing:\n{screen}");
-    assert!(screen.contains("enter to browse"), "hint missing:\n{screen}");
-    assert!(screen.contains("step 199"), "newest call missing:\n{screen}");
+    assert!(
+        screen.contains("enter to browse"),
+        "hint missing:\n{screen}"
+    );
+    assert!(
+        screen.contains("step 199"),
+        "newest call missing:\n{screen}"
+    );
 
     app.focus = Focus::Pane;
     let screen = render(&app, 140, 24);
     assert!(screen.contains("1 of 200"), "position missing:\n{screen}");
-    assert!(screen.contains("Next: run the tests"), "recap gone:\n{screen}");
+    assert!(
+        screen.contains("Next: run the tests"),
+        "recap gone:\n{screen}"
+    );
 
     for _ in 0..80 {
         app.select_next_tool();
@@ -256,7 +268,10 @@ fn selection_bg(app: &App, needle: &str) -> Option<Color> {
         if !row.contains(needle) {
             continue;
         }
-            let bg = buffer.cell((row.find(needle).unwrap() as u16, y)).unwrap().bg;
+        let bg = buffer
+            .cell((row.find(needle).unwrap() as u16, y))
+            .unwrap()
+            .bg;
         return (bg != Color::Reset).then_some(bg);
     }
     panic!("no row contains {needle}");
@@ -429,7 +444,10 @@ fn the_activity_pane_shows_the_live_stream() {
     app.tab = Tab::Activity;
 
     let screen = render(&app, 140, 40);
-    assert!(screen.contains("Next: run the tests"), "recap missing:\n{screen}");
+    assert!(
+        screen.contains("Next: run the tests"),
+        "recap missing:\n{screen}"
+    );
     assert!(
         screen.contains("pstack:poteto-mode"),
         "driver missing:\n{screen}"
@@ -464,7 +482,10 @@ fn an_activity_free_session_says_so() {
     app.tab = Tab::Activity;
 
     let screen = render(&app, 140, 40);
-    assert!(screen.contains("Nothing recorded"), "hint missing:\n{screen}");
+    assert!(
+        screen.contains("Nothing recorded"),
+        "hint missing:\n{screen}"
+    );
 }
 
 #[test]

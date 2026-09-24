@@ -1,9 +1,10 @@
 # dancefloor
 
-A terminal dashboard for your live Claude Code sessions. It is `lazydocker` for agents.
+A terminal dashboard for your live Claude Code, Codex, and Pi sessions. It is `lazydocker` for agents.
 
-`dancefloor` finds every Claude Code session running on this machine. It shows where each
-session works, what it runs, how full its context window is, and which subagents it spawned.
+`dancefloor` finds every supported coding-agent session running on this machine. It shows where
+each session works, what it runs, how full its recorded context window is, and which subagents it
+recorded.
 
 ```
  dancefloor  5 sessions · 1 busy · sort status · every 2s
@@ -109,14 +110,16 @@ under the cursor, and `y` to put its full command on the clipboard.
 
 ## Where the data comes from
 
-`dancefloor` reads files that Claude Code already writes. It never talks to the API, and it
-never writes to your Claude Code state.
+`dancefloor` reads files that the clients already write. It never talks to an API, and it never
+writes to Claude Code, Codex, or Pi state.
 
 | Source | What it gives |
 | ------ | ------------- |
 | `~/.claude/sessions/<pid>.json` | The live session registry: pid, session id, directory, name, and busy or idle status |
 | `~/.claude/projects/<dir>/<session>.jsonl` | Token usage, model, title, branch, permission mode, worktree, pull request, last prompt, and the activity stream |
 | `~/.claude/projects/<dir>/<session>/subagents/` | One `meta.json` per spawned subagent |
+| `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-*.jsonl` | Codex session metadata, lifecycle, messages, tools, and token events |
+| `$PI_CODING_AGENT_SESSION_DIR` (or `~/.pi/agent/sessions`) | Pi session headers, active-branch messages, model changes, and tools |
 | `ps` | CPU and resident memory per session process |
 | `wl-copy`, `xclip`, `xsel`, or `pbcopy` | Whichever is installed, to copy a tool call |
 
@@ -125,6 +128,11 @@ before `dancefloor` reports it, so a crashed session disappears on the next refr
 
 Two sessions often run in the same directory, so the process id identifies a session and the
 directory does not.
+
+Codex uses `$CODEX_HOME` (default `~/.codex`). Pi uses `$PI_CODING_AGENT_DIR` (default
+`~/.pi/agent`) and `$PI_CODING_AGENT_SESSION_DIR` (default its `sessions` directory). Missing
+provider directories are treated as empty. A process without a matching transcript is shown as
+an honest process-only row where the client supports it.
 
 ## Known limits
 

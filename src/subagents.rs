@@ -76,6 +76,8 @@ pub fn read(transcript: &Path) -> Vec<Subagent> {
             spawn_depth: meta.spawn_depth.unwrap_or(0),
             age_secs,
             bytes,
+            client: None,
+            session_id: None,
         });
 
         if agents.len() >= SUBAGENTS_MAX {

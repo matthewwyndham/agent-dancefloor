@@ -95,10 +95,17 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .count();
 
     let mut spans = vec![
-        Span::styled(" dancefloor ", Style::new().fg(Color::Black).bg(ACCENT).bold()),
+        Span::styled(
+            " dancefloor ",
+            Style::new().fg(Color::Black).bg(ACCENT).bold(),
+        ),
         Span::raw(" "),
         Span::styled(
-            format!("{} session{}", app.sessions.len(), plural(app.sessions.len())),
+            format!(
+                "{} session{}",
+                app.sessions.len(),
+                plural(app.sessions.len())
+            ),
             Style::new().bold(),
         ),
         Span::styled(" · ", Style::new().fg(LABEL)),
@@ -107,7 +114,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         // Reversed rather than merely coloured: across a header of grey text,
         // a filled block is what the eye lands on first.
         Span::styled(
-            format!(" {} {waiting} waiting ", crate::model::Status::Waiting.glyph()),
+            format!(
+                " {} {waiting} waiting ",
+                crate::model::Status::Waiting.glyph()
+            ),
             if waiting > 0 {
                 Style::new().fg(Color::Black).bg(Color::Yellow).bold()
             } else {
@@ -129,6 +139,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         spans.push(Span::styled(
             format!("  scan failed: {error}"),
             Style::new().fg(Color::Red).bold(),
+        ));
+    }
+    for warning in &app.provider_warnings {
+        spans.push(Span::styled(
+            format!("  {} unavailable: {}", warning.provider, warning.message),
+            Style::new().fg(Color::Yellow),
         ));
     }
 
