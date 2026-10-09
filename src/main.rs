@@ -1,8 +1,8 @@
-//! dancefloor — a terminal dashboard for live Claude Code sessions.
+//! dancefloor — a terminal dashboard for live coding-agent sessions.
 
 use std::time::Duration;
 
-use dancefloor::{app, config, discovery, model, ui};
+use dancefloor::{app, config, discovery, editor, model, ui};
 
 use anyhow::{bail, Context, Result};
 use ratatui::crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
@@ -27,10 +27,12 @@ fn main() -> Result<()> {
         None => return Ok(()),
     };
 
-    let home = discovery::claude_home()?;
-    if !home.is_dir() {
-        bail!("no Claude Code directory at {}", home.display());
-    }
+    let home = discovery::claude_home().unwrap_or_else(|_| {
+        std::env::var_os("HOME")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_default()
+            .join(".claude")
+    });
 
     let mut app = App::new(home, options.interval, options.limits);
     app.refresh();
@@ -62,6 +64,14 @@ fn run(terminal: &mut ratatui::DefaultTerminal, app: &mut App) -> Result<()> {
             }
         }
 
+        if let Some(path) = app.pending_open.take() {
+            // Hand the terminal to the editor.
+            ratatui::restore();
+            app.notice = editor::open(&path);
+            *terminal = ratatui::init();
+            terminal.clear().context("clear")?;
+        }
+
         if app.last_refresh.elapsed() >= app.interval {
             app.refresh();
         }
@@ -75,6 +85,7 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         app.show_help = false;
         return;
     }
+    app.notice = None;
     if modifiers.contains(KeyModifiers::CONTROL) && code == KeyCode::Char('c') {
         app.should_quit = true;
         return;
@@ -117,6 +128,8 @@ fn handle_key(app: &mut App, code: KeyCode, modifiers: KeyModifiers) {
         KeyCode::Char('3') => app.tab = Tab::Prompt,
         KeyCode::Char('4') => app.tab = Tab::Usage,
         KeyCode::Char('5') => app.tab = Tab::Activity,
+        KeyCode::Char('o') => app.open_raw_log(),
+        KeyCode::Char('O') => app.open_digest(),
         KeyCode::Char('s') => app.cycle_sort(),
         KeyCode::Char('r') => app.refresh(),
         KeyCode::Char('?') => app.show_help = true,
@@ -129,19 +142,23 @@ fn print_snapshot(app: &App) {
     if let Some(error) = &app.scan_error {
         eprintln!("scan failed: {error}");
     }
+    for warning in &app.provider_warnings {
+        eprintln!("{} unavailable: {}", warning.provider, warning.message);
+    }
     if app.sessions.is_empty() {
-        println!("no live Claude Code sessions");
+        println!("no live coding-agent sessions");
         return;
     }
     println!(
-        "{:<8} {:<20} {:<18} {:>5}  {:<16} {:>8}",
-        "STATUS", "NAME", "DIR", "CTX", "MODEL", "UP"
+        "{:<8} {:<7} {:<20} {:<18} {:>5}  {:<16} {:>8}",
+        "STATUS", "CLIENT", "NAME", "DIR", "CTX", "MODEL", "UP"
     );
     let now = App::now_ms();
     for session in &app.sessions {
         println!(
-            "{:<8} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
+            "{:<8} {:<7} {:<20} {:<18} {:>4.0}%  {:<16} {:>8}",
             session.status.label(),
+            session.client.short_label(),
             truncate(&session.name, 20),
             truncate(&session.dir_label(), 18),
             session.context_ratio(app.limits) * 100.0,
@@ -243,7 +260,7 @@ fn token_count(
 
 fn print_help() {
     println!(
-        "dancefloor {} — a terminal dashboard for live Claude Code sessions
+        "dancefloor {} — a terminal dashboard for live coding-agent sessions
 
 USAGE:
     dancefloor [OPTIONS]
@@ -272,6 +289,8 @@ KEYS:
     enter      focus the pane, then open a tool call
     esc        back to the session list
     y          copy an open tool call
+    o          open the raw log in $EDITOR
+    O          open a digest: thinking, commands, agents
     tab        next pane, shift-tab previous
     1 - 5      Detail, Agents, Prompt, Usage, Activity
     s          cycle sort order

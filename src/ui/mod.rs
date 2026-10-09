@@ -95,10 +95,17 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         .count();
 
     let mut spans = vec![
-        Span::styled(" dancefloor ", Style::new().fg(Color::Black).bg(ACCENT).bold()),
+        Span::styled(
+            " dancefloor ",
+            Style::new().fg(Color::Black).bg(ACCENT).bold(),
+        ),
         Span::raw(" "),
         Span::styled(
-            format!("{} session{}", app.sessions.len(), plural(app.sessions.len())),
+            format!(
+                "{} session{}",
+                app.sessions.len(),
+                plural(app.sessions.len())
+            ),
             Style::new().bold(),
         ),
         Span::styled(" · ", Style::new().fg(LABEL)),
@@ -107,7 +114,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         // Reversed rather than merely coloured: across a header of grey text,
         // a filled block is what the eye lands on first.
         Span::styled(
-            format!(" {} {waiting} waiting ", crate::model::Status::Waiting.glyph()),
+            format!(
+                " {} {waiting} waiting ",
+                crate::model::Status::Waiting.glyph()
+            ),
             if waiting > 0 {
                 Style::new().fg(Color::Black).bg(Color::Yellow).bold()
             } else {
@@ -131,6 +141,12 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             Style::new().fg(Color::Red).bold(),
         ));
     }
+    for warning in &app.provider_warnings {
+        spans.push(Span::styled(
+            format!("  {} unavailable: {}", warning.provider, warning.message),
+            Style::new().fg(Color::Yellow),
+        ));
+    }
 
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
@@ -142,6 +158,7 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
         Focus::Sessions => &[
             ("j/k", "move"),
             ("enter", "focus pane"),
+            ("o/O", "log/digest"),
             ("tab", "pane"),
             ("1-5", "jump"),
             ("s", "sort"),
@@ -162,6 +179,12 @@ fn draw_footer(frame: &mut Frame, app: &App, area: Rect) {
     for (key, action) in keys {
         spans.push(Span::styled(format!(" {key} "), Style::new().fg(ACCENT)));
         spans.push(Span::styled(*action, Style::new().fg(LABEL)));
+    }
+    if let Some(notice) = &app.notice {
+        spans.push(Span::styled(
+            format!("   {notice}"),
+            Style::new().fg(Color::Yellow),
+        ));
     }
     if app.sessions.is_empty() {
         spans.push(Span::styled(
@@ -186,6 +209,8 @@ fn draw_help(frame: &mut Frame, area: Rect) {
         label_value("s", "cycle sort order"),
         label_value("r", "refresh now"),
         label_value("y", "copy an open tool call"),
+        label_value("o", "open the raw log in $EDITOR"),
+        label_value("O", "open a digest: thinking, commands, agents"),
         label_value("? ", "close this help"),
         label_value("q", "quit"),
         Line::raw(""),

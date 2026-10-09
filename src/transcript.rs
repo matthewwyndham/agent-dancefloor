@@ -128,7 +128,8 @@ fn read_tail_lines(path: &Path) -> std::io::Result<Vec<String>> {
     file.seek(SeekFrom::Start(start))?;
 
     let mut buffer = Vec::with_capacity(TRANSCRIPT_TAIL_BYTES_MAX as usize);
-    file.take(TRANSCRIPT_TAIL_BYTES_MAX).read_to_end(&mut buffer)?;
+    file.take(TRANSCRIPT_TAIL_BYTES_MAX)
+        .read_to_end(&mut buffer)?;
     let text = String::from_utf8_lossy(&buffer);
 
     let mut lines: Vec<String> = Vec::new();
@@ -206,7 +207,9 @@ fn parse_entry(entry: &Value, detail: &mut Detail, pending: &mut Pending) {
             // newest user entry, because tool results are user entries too.
             if let Some(text) = user_prompt_text(entry) {
                 if let Some(uuid) = entry.get("uuid").and_then(Value::as_str) {
-                    pending.prompts_by_uuid.insert(uuid.to_string(), text.clone());
+                    pending
+                        .prompts_by_uuid
+                        .insert(uuid.to_string(), text.clone());
                 }
                 pending.newest_prompt = Some(text);
             }
@@ -307,7 +310,13 @@ const TOOL_SUMMARY_KEY: &str = "description";
 /// The input keys naming what a call was aimed at, best first. A file path beats
 /// a search pattern, and a URL beats the prompt sent with it.
 const TOOL_DETAIL_KEYS: [&str; 7] = [
-    "file_path", "pattern", "url", "query", "skill", "command", "prompt",
+    "file_path",
+    "pattern",
+    "url",
+    "query",
+    "skill",
+    "command",
+    "prompt",
 ];
 
 fn record_tool_calls(message: &Value, detail: &mut Detail) {
@@ -324,7 +333,9 @@ fn record_tool_calls(message: &Value, detail: &mut Detail) {
         let input = block.get("input");
         detail.activity.record_tool(ToolCall {
             name: tool_name(name),
-            summary: tool_field(input, |map| map.get(TOOL_SUMMARY_KEY).and_then(Value::as_str)),
+            summary: tool_field(input, |map| {
+                map.get(TOOL_SUMMARY_KEY).and_then(Value::as_str)
+            }),
             detail: tool_field(input, |map| {
                 TOOL_DETAIL_KEYS
                     .iter()
@@ -369,7 +380,10 @@ fn parse_system(entry: &Value, detail: &mut Detail) {
         "turn_duration" => {
             detail.activity.last_turn = Some(Turn {
                 duration_ms: entry.get("durationMs").and_then(Value::as_u64).unwrap_or(0),
-                messages: entry.get("messageCount").and_then(Value::as_u64).unwrap_or(0),
+                messages: entry
+                    .get("messageCount")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
             });
         }
         _ => {}
@@ -584,7 +598,10 @@ mod tests {
         parse_lines(&lines, &mut detail);
 
         // Only the long one, and with the suffix off so it matches `model`.
-        assert_eq!(detail.long_context_models, vec!["claude-opus-5".to_string()]);
+        assert_eq!(
+            detail.long_context_models,
+            vec!["claude-opus-5".to_string()]
+        );
     }
 
     #[test]
@@ -667,7 +684,9 @@ mod tests {
     #[test]
     fn an_unattributed_turn_clears_the_driver() {
         assert_eq!(
-            driver_after(r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[]}}"#),
+            driver_after(
+                r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[]}}"#
+            ),
             None
         );
     }
@@ -712,7 +731,8 @@ mod tests {
     #[test]
     fn the_activity_ring_stays_bounded() {
         let call = r#"{"type":"assistant","message":{"model":"claude-opus-5","content":[{"type":"tool_use","name":"Read","input":{"file_path":"/repo/src/app.rs"}}]}}"#;
-        let lines: Vec<String> = std::iter::repeat_n(call.to_string(), TOOL_CALLS_MAX * 3).collect();
+        let lines: Vec<String> =
+            std::iter::repeat_n(call.to_string(), TOOL_CALLS_MAX * 3).collect();
 
         let mut detail = Detail::default();
         parse_lines(&lines, &mut detail);

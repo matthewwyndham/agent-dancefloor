@@ -2,6 +2,53 @@
 
 use std::path::PathBuf;
 
+/// A provider that owns a live coding-agent session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ClientKind {
+    Claude,
+    Codex,
+    Pi,
+}
+
+impl ClientKind {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Claude => "Claude",
+            Self::Codex => "Codex",
+            Self::Pi => "Pi",
+        }
+    }
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::Claude => "CL",
+            Self::Codex => "CX",
+            Self::Pi => "PI",
+        }
+    }
+}
+
+impl std::fmt::Display for ClientKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.label())
+    }
+}
+
+/// Session ids are only unique inside a client (and some clients can reuse ids).
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SessionKey {
+    pub client: ClientKind,
+    pub session_id: String,
+}
+
+impl SessionKey {
+    pub fn new(client: ClientKind, session_id: impl Into<String>) -> Self {
+        Self {
+            client,
+            session_id: session_id.into(),
+        }
+    }
+}
+
 /// Upper bounds. Each read path is capped so a runaway file or a directory full
 /// of stale entries cannot stall a redraw.
 pub const SESSIONS_MAX: usize = 256;
@@ -91,6 +138,36 @@ impl Status {
 pub struct ProcStat {
     pub rss_kib: u64,
     pub cpu_percent: f64,
+}
+
+/// A process observation collected in one refresh. Providers consume this
+/// immutable snapshot, so tests never need to depend on the host process table.
+#[derive(Debug, Clone, Default)]
+pub struct ProcessSnapshot {
+    pub processes: Vec<ProcessInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ProcessInfo {
+    pub pid: u32,
+    pub ppid: Option<u32>,
+    pub started_at_ms: Option<i64>,
+    pub elapsed_secs: Option<u64>,
+    pub rss_kib: u64,
+    pub cpu_percent: f64,
+    pub executable: String,
+    pub command: String,
+    pub args: Vec<String>,
+    pub cwd: Option<PathBuf>,
+}
+
+impl ProcessInfo {
+    pub fn proc_stat(&self) -> ProcStat {
+        ProcStat {
+            rss_kib: self.rss_kib,
+            cpu_percent: self.cpu_percent,
+        }
+    }
 }
 
 /// Token counts from the most recent assistant message.
@@ -222,6 +299,8 @@ pub struct Subagent {
     pub spawn_depth: u64,
     pub age_secs: Option<u64>,
     pub bytes: u64,
+    pub client: Option<ClientKind>,
+    pub session_id: Option<String>,
 }
 
 /// Everything recovered from a session's transcript file.
@@ -300,6 +379,7 @@ pub struct Limits {
 
 #[derive(Debug, Clone)]
 pub struct Session {
+    pub client: ClientKind,
     pub pid: u32,
     pub session_id: String,
     pub cwd: PathBuf,
@@ -318,6 +398,9 @@ pub struct Session {
 }
 
 impl Session {
+    pub fn key(&self) -> SessionKey {
+        SessionKey::new(self.client, self.session_id.clone())
+    }
     /// Directory name only. Two sessions often share a repo, so the list shows
     /// this while the detail pane shows the full path.
     pub fn dir_label(&self) -> String {
@@ -461,6 +544,7 @@ mod tests {
 
     fn session(peak: u64, used: u64) -> Session {
         Session {
+            client: ClientKind::Claude,
             pid: 1,
             session_id: "s".into(),
             cwd: PathBuf::from("/repo"),
