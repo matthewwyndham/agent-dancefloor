@@ -320,10 +320,10 @@ fn render(session: &Session, log: &Path, tracks: &[Track]) -> String {
             match step {
                 Step::Prompt(text) => {
                     let _ = writeln!(out, "### Prompt\n");
-                    let _ = writeln!(out, "{}", quote(text));
+                    let _ = writeln!(out, "{}", fence("md", text));
                 }
                 Step::Thinking(text) => {
-                    let _ = writeln!(out, "**Thinking**\n");
+                    let _ = writeln!(out, "#### Thinking\n");
                     let _ = writeln!(out, "{}", quote(text));
                 }
                 Step::Call {
@@ -332,16 +332,36 @@ fn render(session: &Session, log: &Path, tracks: &[Track]) -> String {
                     input,
                 } => {
                     if summary.is_empty() {
-                        let _ = writeln!(out, "**{tool}**\n");
+                        let _ = writeln!(out, "#### {tool}\n");
                     } else {
-                        let _ = writeln!(out, "**{tool}**: {summary}\n");
+                        let _ = writeln!(out, "#### {tool}: {summary}\n");
                     }
-                    let _ = writeln!(out, "````\n{}\n````", input.trim_end());
+                    let lang = if is_shell(tool) { "sh" } else { "" };
+                    let _ = writeln!(out, "{}", fence(lang, input));
                 }
             }
         }
     }
     out
+}
+
+/// Tools that run shell commands.
+fn is_shell(tool: &str) -> bool {
+    matches!(
+        tool.to_lowercase().as_str(),
+        "bash" | "shell" | "shell_command" | "exec_command"
+    )
+}
+
+/// Fence longer than any backtick run inside.
+fn fence(lang: &str, text: &str) -> String {
+    let longest = text
+        .split(|c| c != '`')
+        .map(str::len)
+        .max()
+        .unwrap_or(0);
+    let ticks = "`".repeat(longest.max(2) + 1);
+    format!("{ticks}{lang}\n{}\n{ticks}", text.trim_end())
 }
 
 fn quote(text: &str) -> String {
@@ -390,6 +410,12 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn fence_outgrows_inner_backticks() {
+        assert_eq!(fence("sh", "ls"), "```sh\nls\n```");
+        assert_eq!(fence("md", "a ```x``` b"), "````md\na ```x``` b\n````");
     }
 
     #[test]
