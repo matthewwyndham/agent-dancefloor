@@ -295,7 +295,7 @@ fn heading(text: &'static str, count: usize) -> Line<'static> {
 
 /// Pad to the full width so the selection reads as a bar rather than as a patch
 /// behind the text.
-fn highlight(line: Line<'static>, width: usize) -> Line<'static> {
+pub(super) fn highlight(line: Line<'static>, width: usize) -> Line<'static> {
     let used: usize = line.spans.iter().map(|s| s.content.chars().count()).sum();
     let mut line = line;
     if used < width {
@@ -306,7 +306,7 @@ fn highlight(line: Line<'static>, width: usize) -> Line<'static> {
 
 /// Greedy word wrap. The pane builds its own rows because a widget that wraps
 /// for itself makes the scroll offset unknowable.
-fn wrap(text: &str, width: usize) -> Vec<String> {
+pub(super) fn wrap(text: &str, width: usize) -> Vec<String> {
     if width < 2 {
         return Vec::new();
     }
@@ -334,7 +334,7 @@ fn wrap(text: &str, width: usize) -> Vec<String> {
 ///
 /// A path is identified by its end, so it loses its front; everything else
 /// loses its tail.
-fn clip(text: &str, room: usize) -> String {
+pub(super) fn clip(text: &str, room: usize) -> String {
     let length = text.chars().count();
     if room < 2 || length <= room {
         return text.to_string();

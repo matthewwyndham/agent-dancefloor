@@ -8,6 +8,7 @@ use ratatui::Frame;
 
 use crate::app::{App, Focus, Tab};
 use crate::model::{duration_short, tokens_short, Session, Status};
+use crate::ui::activity::{clip, highlight};
 use crate::ui::{context_color, label_value, status_color, ACCENT, LABEL};
 
 pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
@@ -47,7 +48,7 @@ pub fn draw(frame: &mut Frame, app: &App, area: Rect) {
 
     match app.tab {
         Tab::Detail => draw_detail(frame, app, session, content),
-        Tab::Agents => draw_agents(frame, session, content),
+        Tab::Agents => draw_agents(frame, app, session, content),
         Tab::Prompt => draw_prompt(frame, session, content),
         Tab::Usage => draw_usage(frame, app, session, content),
         Tab::Activity => super::activity::draw(frame, app, session, content),
@@ -70,6 +71,10 @@ fn draw_detail(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
 fn heading_lines(session: &Session) -> Vec<Line<'static>> {
     vec![
         Line::from(vec![
+            Span::styled(
+                format!("{}  ", session.client.label()),
+                Style::new().fg(ACCENT).bold(),
+            ),
             Span::styled(session.name.clone(), Style::new().fg(ACCENT).bold()),
             Span::styled(
                 format!(
@@ -248,7 +253,7 @@ fn draw_context_gauge(frame: &mut Frame, app: &App, session: &Session, area: Rec
     );
 }
 
-fn draw_agents(frame: &mut Frame, session: &Session, area: Rect) {
+fn draw_agents(frame: &mut Frame, app: &App, session: &Session, area: Rect) {
     let agents = &session.detail.subagents;
     if agents.is_empty() {
         frame.render_widget(
@@ -261,39 +266,93 @@ fn draw_agents(frame: &mut Frame, session: &Session, area: Rect) {
         return;
     }
 
-    let mut lines = Vec::new();
-    for agent in agents {
-        lines.push(Line::from(vec![
-            Span::styled(agent.name.clone(), Style::new().bold()),
-            Span::styled(format!("  {}", agent.agent_type), Style::new().fg(ACCENT)),
-            Span::styled(
-                format!("  depth {}", agent.spawn_depth),
-                Style::new().fg(LABEL),
-            ),
-        ]));
-        // The description is the prompt or skill the agent was spawned for, so it
-        // is the line that says what the agent is actually doing.
-        if !agent.description.is_empty() {
-            lines.push(Line::from(Span::styled(
-                format!("  {}", agent.description),
-                Style::new().fg(Color::Gray),
-            )));
-        }
-        lines.push(Line::from(Span::styled(
-            format!(
-                "  {} KiB · idle {}",
-                agent.bytes / 1024,
-                agent
-                    .age_secs
-                    .map(duration_short)
-                    .unwrap_or_else(|| "—".into())
-            ),
+    // Pinned, like the Activity readout.
+    let [status, body] = Layout::vertical([Constraint::Length(1), Constraint::Min(0)]).areas(area);
+    let focused = app.focus != Focus::Sessions;
+    let mut spans = vec![
+        Span::styled("agents", Style::new().fg(ACCENT).bold()),
+        Span::styled(
+            if focused {
+                format!("  {} of {}", app.agent_cursor + 1, agents.len())
+            } else {
+                format!("  {}", agents.len())
+            },
             Style::new().fg(LABEL),
-        )));
-        lines.push(Line::raw(""));
+        ),
+    ];
+    if !focused {
+        spans.push(Span::styled(
+            "  enter to browse",
+            Style::new().fg(Color::Gray),
+        ));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), status);
+
+    // One row per screen row, so scroll is exact.
+    let width = body.width as usize;
+    let height = body.height as usize;
+    let mut rows: Vec<(Line, Option<usize>)> = Vec::new();
+    for (index, agent) in agents.iter().enumerate() {
+        rows.push((
+            Line::from(vec![
+                Span::styled(agent.name.clone(), Style::new().bold()),
+                Span::styled(format!("  {}", agent.agent_type), Style::new().fg(ACCENT)),
+                Span::styled(
+                    format!("  depth {}", agent.spawn_depth),
+                    Style::new().fg(LABEL),
+                ),
+            ]),
+            Some(index),
+        ));
+        // The description says what the agent does.
+        if !agent.description.is_empty() {
+            rows.push((
+                Line::from(Span::styled(
+                    format!("  {}", clip(&agent.description, width.saturating_sub(2))),
+                    Style::new().fg(Color::Gray),
+                )),
+                Some(index),
+            ));
+        }
+        rows.push((
+            Line::from(Span::styled(
+                format!(
+                    "  {} KiB · idle {}",
+                    agent.bytes / 1024,
+                    agent
+                        .age_secs
+                        .map(duration_short)
+                        .unwrap_or_else(|| "—".into())
+                ),
+                Style::new().fg(LABEL),
+            )),
+            Some(index),
+        ));
+        rows.push((Line::raw(""), None));
     }
 
-    frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: false }), area);
+    // Keep the cursor row in the middle.
+    let anchor = focused
+        .then(|| rows.iter().position(|(_, a)| *a == Some(app.agent_cursor)))
+        .flatten();
+    let offset = anchor
+        .map(|row| row.saturating_sub(height / 2))
+        .unwrap_or(0)
+        .min(rows.len().saturating_sub(height));
+
+    let visible: Vec<Line> = rows
+        .into_iter()
+        .skip(offset)
+        .take(height)
+        .map(|(line, agent)| {
+            if focused && agent == Some(app.agent_cursor) {
+                highlight(line, width)
+            } else {
+                line
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(visible), body);
 }
 
 fn draw_prompt(frame: &mut Frame, session: &Session, area: Rect) {

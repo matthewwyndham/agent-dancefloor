@@ -58,7 +58,9 @@ pub fn read(transcript: &Path) -> Vec<Subagent> {
         // Size and age come from the conversation file, not the metadata: they
         // are what show whether an agent is still working.
         let conversation = path.with_file_name(filename.replace(".meta.json", ".jsonl"));
-        let (bytes, age_secs) = match std::fs::metadata(&conversation) {
+        let found = std::fs::metadata(&conversation);
+        let transcript = found.is_ok().then(|| conversation.clone());
+        let (bytes, age_secs) = match found {
             Ok(meta) => (
                 meta.len(),
                 meta.modified()
@@ -76,6 +78,9 @@ pub fn read(transcript: &Path) -> Vec<Subagent> {
             spawn_depth: meta.spawn_depth.unwrap_or(0),
             age_secs,
             bytes,
+            client: None,
+            session_id: None,
+            transcript,
         });
 
         if agents.len() >= SUBAGENTS_MAX {
